@@ -4,6 +4,14 @@
    compilar: clear && gcc *.c -o exe -pthread && ./exe 1
 
    OBS: O código será refatorado e divido em outros arquivos ao passar do tempo
+
+
+próximos passos: 
+
+-passar info de roteador origem, mensagem, roteador destino (tentar uma struct)
+-usar o packet handler para tratamento
+-criar os mutex
+-tratar mensagem dos roteadores intermediários
 */
 
 #include <stdio.h>
@@ -64,8 +72,6 @@ struct EstruturaControle {
 
 typedef struct EstruturaControle estrutura_controle;
 
-/* DEPOIS MUDAR PARA TAMANHO DINAMICO */
-
 short int contator_fila_entrada = 0;
 short int contator_fila_saida = 0;
 estrutura_controle fila_entrada[100];
@@ -107,13 +113,13 @@ int main (int argc, char *argv[]) {
 	/* Cria threads */
 	pthread_create(&terminal_thread, NULL, terminal, NULL);
 	pthread_create(&sender_thread, NULL, sender, NULL);
-	/* pthread_create(&receiver_thread, NULL, receiver, NULL); */
+	pthread_create(&receiver_thread, NULL, receiver, NULL);
 	/* pthread_create(&packet_handler_thread, NULL, packet_handler, NULL); */
 	
 	/* joining threads */
 	pthread_join(terminal_thread, NULL);	
 	pthread_join(sender_thread, NULL);
-	/* pthread_join(receiver, NULL); */
+	pthread_join(receiver_thread, NULL);
 	/* pthread_join(packet_handler, NULL); */
 	
 	return 0;
@@ -125,7 +131,7 @@ void *terminal(void *params) {
 
 	while (1) {
 
-		system("clear");
+		//system("clear");
 		int action = -1;
 
 		printf("\tGerenciamento dos roteadores\n\n");
@@ -235,10 +241,10 @@ void gravar_mensagem(short int roteador_id_recebe, char mensagem[100]) {
 	for (int i = 0; i < len; i++) {
 		if (mensagens[i].mensagem_exibida) {
 			
-			mensagens[contador_mensagens].roteador_id = roteador_id_recebe;
-			strcpy(mensagens[contador_mensagens].mensagem, mensagem);
-			mensagens[contador_mensagens].mensagem_exibida = 0;
-			contador_mensagens++;
+			mensagens[i].roteador_id = roteador_id_recebe;
+			strcpy(mensagens[i].mensagem, mensagem);
+			mensagens[i].mensagem_exibida = 0;
+			break;
 		}
 	}
 }
@@ -263,7 +269,125 @@ void inicializar_vetor_mensagem() {
 	short int len = sizeof(mensagens) / sizeof(mensagens[0]);
 	
 	for (int i = 0; i < len; i++) {
-		mensagens[i].mensagem_exibida = 1;	
+		mensagens[i].mensagem_exibida = 1;
+		fila_entrada[i].mensagem_enviada = 1;
+		fila_saida[i].mensagem_enviada = 1;
+	}
+}
+
+		   
+/* thread que envia a mensagem */
+void *sender(void *params) {
+	//debug("Thread sender criada");
+	/* LEMBRAR DE CRIAR O MUTEX */
+
+	
+	
+	while (1) {
+
+		/* percorre a lista de mensagens para ver se falta alguma para ser enviada,
+		   se tem alguma mensagem na lista, ela será enviada */
+		
+		short int len = sizeof(fila_saida) / sizeof(fila_saida[0]);
+		
+		for (int i = 0; i < len; i++) {
+			if (!fila_saida[i].mensagem_enviada) {
+
+				char buffer[100];
+				struct sockaddr_in cliente_envio;
+
+				/* cria socket */
+				/*    params: IPv4, UDP, default protolo */
+				int socket_descriptor = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+
+				/* verifica se foi criado */
+				if (socket_descriptor < 0) {
+					printf("Cannot open the socket\n");
+				}
+
+				/* 0 */
+				memset((char*) &cliente_envio, 0, sizeof(cliente_envio));
+
+				/* preenche com as info do servidor */
+				cliente_envio.sin_family = AF_INET; // IPv4
+				cliente_envio.sin_port = htons(fila_saida[i].porta_destino);
+
+				/* bind socket */
+				if (inet_aton(fila_saida[i].ip_destino, &cliente_envio.sin_addr) == 0) {
+					printf("INET_ATON() failed\n");
+				}
+	
+				debug("roeador configurado");
+				socklen_t slen = sizeof(cliente_envio);
+				debug("mensagem pra enviar");
+
+				/* envia para o servidor*/
+				if (sendto(socket_descriptor, fila_saida[i].mensagem, strlen(fila_saida[i].mensagem), 0, (struct sockaddr*) &cliente_envio, slen) == -1) {
+					gravar_mensagem(fila_saida[i].id_origem, "Error ao tentar enviar mensagem");
+				}
+				else {
+					debug("mensagem foi enviada"); sleep(2);
+					fila_saida[i].mensagem_enviada = 1;
+				}
+
+				char a[3];
+				
+				/* recebe confirmação */
+				int recv_from = recvfrom(socket_descriptor, a, 3, 0, (struct sockaddr*) &cliente_envio, &slen);
+				printf("->>> %d %s\n", recv_from, a);
+
+				close(socket_descriptor);
+			}
+		}		
+	}
+}
+
+/* servidor */
+void *receiver(void *params) {
+
+	char buffer[100];
+	struct sockaddr_in server_recebe, cliente_envio;
+
+	/* creating socket */
+	/*    params: IPv4, UDP, default protocal */
+	int socket_descriptor = socket(AF_INET, SOCK_DGRAM, 0);
+
+	if (socket_descriptor < 0) {
+		printf("Cannot open the socket\n");
+	}
+
+	/* 0 */
+	memset(&server_recebe, 0, sizeof(server_recebe));
+
+	/* preenche info do servidor */
+	server_recebe.sin_family = AF_INET; // IPv4
+    server_recebe.sin_addr.s_addr = htonl(INADDR_ANY);
+    server_recebe.sin_port = htons(roteador_porta);
+	
+	/* bind socket */
+	if (bind(socket_descriptor, (struct sockaddr*) &server_recebe, sizeof(server_recebe)) < 0) {
+		printf("Could not bind socket\n");
+	}
+
+	while (1) {
+		
+		debug("lendo mensagem"); sleep(2);
+		fflush(stdout);
+		
+		/* clean the buffer */
+		//memset(buffer, '\0', 100);
+
+		int slen = sizeof(cliente_envio);
+		int recv_from = recvfrom(socket_descriptor, buffer, 100, 0, (struct sockaddr*) &cliente_envio, &slen);
+
+		debug("Received packet from");
+		//printf(" %s:%d\n", inet_ntoa(cliente_envio.sin_addr), ntohs(cliente_envio.sin_port));
+		
+		//printf("Test: %s\n", buffer);
+		gravar_mensagem(0, buffer);
+
+		/* enviar uma resposta de confirmação para o cliente */
+		sendto(socket_descriptor, "ok",3, 0, (struct sockaddr*) &cliente_envio, slen) == -1;		
 	}
 }
 
@@ -271,26 +395,6 @@ void inicializar_vetor_mensagem() {
 
 
 
-
-
-
-
-
-
-		   
-/* thread que envia a mensagem */
-void *sender(void *params) {
-	//debug("Thread sender criada");
-   
-}
-
-
-
-void *receiver(void *params) {
-    int id;
-    id = *((int *) params);
-    free((int *)params);
-}
 
 
 
