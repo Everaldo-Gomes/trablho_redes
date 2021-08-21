@@ -5,13 +5,22 @@
 
    OBS: O código será refatorado e divido em outros arquivos ao passar do tempo
 
+   
+   -Documentação:------------------------------------------------------------------
+   1º caracter é o tipo da mensagem dados (d) ou controle (c)
+   2º e 3º caracter são os IDs dos roteadores de origem
+   4º e 5º caracter são os IDs dos roteadores de destino
+   6º ao 105 será a mensagem
 
-próximos passos: 
+   Ex: D0102mensagem
+   --------------------------------------------------------------------------------
 
--passar info de roteador origem, mensagem, roteador destino (tentar uma struct)
--usar o packet handler para tratamento
--criar os mutex
--tratar mensagem dos roteadores intermediários
+   próximos passos: 
+   
+   -copiar função que lê o arquivo passando a fila_entrada
+   -usar o packet handler para tratamento
+   -criar os mutex
+   -tratar mensagem dos roteadores intermediários
 */
 
 #include <stdio.h>
@@ -47,7 +56,7 @@ void carrega_info_roteador_receptor(short int);
 void exibir_mensagens();
 void inicializar_vetor_mensagem();
 void gravar_mensagem(short int roteador_id_recebe, char mensagem[100]);
-
+void carregar_fila_entrada(char [250]);
 
 /* Threads */
 pthread_t terminal_thread, sender_thread, receiver_thread, packet_handler_thread;
@@ -66,8 +75,7 @@ struct EstruturaControle {
     char                ip_origen[12]; //Ip roteador origem
     char                ip_destino[12];//Ip roteador destino
     char                mensagem[100]; //Mensagem de com tamanho de 100 chars
-	short               mensagem_enviada; //controle para saber se já foi enviada
-	
+	short               mensagem_enviada; //controle para saber se já foi enviada	
 };
 
 typedef struct EstruturaControle estrutura_controle;
@@ -76,7 +84,7 @@ short int contator_fila_entrada = 0;
 short int contator_fila_saida = 0;
 estrutura_controle fila_entrada[100];
 estrutura_controle fila_saida[100];
-
+char* montar_mensagem_dado_envio(struct EstruturaControle);
 
 /* salva as mensagens recebidas por algum roteador */
 struct Mensagem {
@@ -220,6 +228,8 @@ void carrega_info_roteador_receptor(short int roteador_id_recebe) {
 			fila_saida[contator_fila_saida].mensagem_enviada = 0;
 			fila_saida[contator_fila_saida].tipo_mensagem = dado;
 			contator_fila_saida++;
+/* isso na verdade é o controle da quantidade de roteadores (mudar depois) 
+ fazer o mesmo controle das mensagens, se já tem sobreescreve*/
 			
 			break;
 		}
@@ -321,8 +331,19 @@ void *sender(void *params) {
 				socklen_t slen = sizeof(cliente_envio);
 				debug("mensagem pra enviar");
 
+				/* retorna a mensagem a ser enviada */
+				char mensagem[250];
+				
+				if (fila_saida[i].tipo_mensagem == dado) {
+					strcpy(mensagem, montar_mensagem_dado_envio(fila_saida[i]));
+				}
+				//else
+					//falata implementar
+					//strcpy(mensagem, montar_mensagem_dado_envio(fila_saida[i]));
+				
+				
 				/* envia para o servidor*/
-				if (sendto(socket_descriptor, fila_saida[i].mensagem, strlen(fila_saida[i].mensagem), 0, (struct sockaddr*) &cliente_envio, slen) == -1) {
+				if (sendto(socket_descriptor, mensagem, strlen(mensagem), 0, (struct sockaddr*) &cliente_envio, slen) == -1) {
 					gravar_mensagem(fila_saida[i].id_origem, "Error ao tentar enviar mensagem");
 				}
 				else {
@@ -345,7 +366,7 @@ void *sender(void *params) {
 /* servidor */
 void *receiver(void *params) {
 
-	char buffer[100];
+	char buffer[250];
 	struct sockaddr_in server_recebe, cliente_envio;
 
 	/* creating socket */
@@ -371,38 +392,39 @@ void *receiver(void *params) {
 
 	while (1) {
 		
-		debug("lendo mensagem"); sleep(2);
+		debug("lendo mensagem");
 		fflush(stdout);
 		
 		/* clean the buffer */
 		//memset(buffer, '\0', 100);
-
+		
 		int slen = sizeof(cliente_envio);
-		int recv_from = recvfrom(socket_descriptor, buffer, 100, 0, (struct sockaddr*) &cliente_envio, &slen);
+		int recv_from = recvfrom(socket_descriptor, buffer, 250, 0, (struct sockaddr*) &cliente_envio, &slen);
 
 		debug("Received packet from");
 		//printf(" %s:%d\n", inet_ntoa(cliente_envio.sin_addr), ntohs(cliente_envio.sin_port));
-		
-		//printf("Test: %s\n", buffer);
+
+		/* DEPOIS RETIRAR ISSO AQUI, */
 		gravar_mensagem(0, buffer);
 
 		/* enviar uma resposta de confirmação para o cliente */
-		sendto(socket_descriptor, "ok",3, 0, (struct sockaddr*) &cliente_envio, slen) == -1;		
+		sendto(socket_descriptor, "OK",3, 0, (struct sockaddr*) &cliente_envio, slen) == -1;
+		
+		carregar_fila_entrada(buffer);
+	}
+}
+
+
+void *packet_handler(void *params) {
+
+	while (1) {
+		
 	}
 }
 
 
 
 
-
-
-
-
-void *packet_handler(void *params) {
-    int id;
-    id = *((int *) params);
-    free((int *)params);
-}
 
 
 void inserir_info_roteador() {
@@ -426,4 +448,55 @@ void inserir_info_roteador() {
 /* Função para exibir códigos em modo debug */
 void debug(char msg[100]) {
 	if (MODO_DEBUG) { printf("Debug: %s\n", msg); }
+}
+
+
+char* montar_mensagem_dado_envio(struct EstruturaControle s) {
+	
+	static char mensagem_pronta[250], aux[6];
+	
+	/* tipo de mensagem */
+	mensagem_pronta[0] = 'D';
+
+	/* id origem */	
+	sprintf(aux, "%02d", s.id_origem);
+	strcat(mensagem_pronta, aux);
+	
+	/* id destino */
+	sprintf(aux, "%02d", s.id_destino);
+	strcat(mensagem_pronta, aux);
+
+	/* copia tudo para a mensagem a ser enviada */
+	strcat(mensagem_pronta, s.mensagem);
+
+	return mensagem_pronta;
+}
+
+
+void carregar_fila_entrada(char buffer[250]) {
+
+	char aux[3];
+
+	/* id origem */
+	aux[0] = buffer[1];
+	aux[1] = buffer[2];
+	fila_entrada[contator_fila_entrada].id_origem = atoi(aux);
+
+	/* id destino */
+	aux[0] = buffer[3];
+	aux[1] = buffer[4];	
+	fila_entrada[contator_fila_entrada].id_destino = atoi(aux);
+
+	/* mensagem */
+	for (int i = 5, j = 0; i < 105; i++, j++) {
+		fila_entrada[contator_fila_entrada].mensagem[j] = buffer[i];
+	}
+
+	/* carrega as outras info faltantes */
+	carrega_info_roteador_receptor(fila_entrada[contator_fila_entrada].id_destino);
+	
+	fila_entrada[contator_fila_entrada].tipo_mensagem = buffer[0] == 'D' ? dado : controle;
+	
+	printf("%d ", fila_entrada[contator_fila_entrada].porta_destino);
+	printf("%s ", fila_entrada[contator_fila_entrada].ip_destino);
 }
