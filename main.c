@@ -1,5 +1,5 @@
 /* 
-   Grupo: Natanael Henrique, Everaldo Gomes 
+   Grupo: Natanael Zago, Everaldo Gomes 
 
    compilar: clear && gcc *.c -o exe -pthread && ./exe 1
 
@@ -16,7 +16,7 @@
    --------------------------------------------------------------------------------
 
    próximos passos: 
-   
+   -fazer teste de enviar para computadores diferentes
    -copiar função que lê o arquivo passando a fila_entrada
    -usar o packet handler para tratamento
    -criar os mutex
@@ -38,8 +38,8 @@ short int MODO_DEBUG = 1; //usar para controlar modo debug
 
 /* configurando o roteador */
 short int roteador_ativo = 1;
-short int roteador_porta = 0;
-short int roteador_id = 0;
+short roteador_porta = 0;
+unsigned short roteador_id = 0;
 char roteador_ip[] = "127.0.0.1";
 
 /* Funções das Threads */
@@ -48,6 +48,13 @@ void *sender(void *params);  //Enviar mensagens roteadores vizinhos
 void *terminal(void *params);//Controle local das mensagens 
 void *packet_handler(void *params);//Entradas e saídas de dados em tela
 
+
+/* Mutex */
+pthread_mutex_t fila_saida_mutex    = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t fila_entrada_mutex  = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t fila_mensagem_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+
 /* cabeçalho de Funções*/
 void inserir_info_roteador();  	/* armazena info do roteador no arquivo roteador.config */
 void debug(char msg[100]); /* exibir mensagens debug */
@@ -55,8 +62,9 @@ void inserir_mensagem();
 void carrega_info_roteador_receptor(short int);
 void exibir_mensagens();
 void inicializar_vetor_mensagem();
-void gravar_mensagem(short int roteador_id_recebe, char mensagem[100]);
+void gravar_mensagem(short int roteador_id_recebe, short int roteador_id_envia, char mensagem[100]);
 void carregar_fila_entrada(char [250]);
+
 
 /* Threads */
 pthread_t terminal_thread, sender_thread, receiver_thread, packet_handler_thread;
@@ -72,10 +80,11 @@ struct EstruturaControle {
     unsigned short      id_destino;    //Identificador roteador destino
     unsigned short      porta_origem;  //Porta roteador origem
     unsigned short      porta_destino; //Porta roteador destino
-    char                ip_origen[12]; //Ip roteador origem
+    char                ip_origem[12]; //Ip roteador origem
     char                ip_destino[12];//Ip roteador destino
     char                mensagem[100]; //Mensagem de com tamanho de 100 chars
-	short               mensagem_enviada; //controle para saber se já foi enviada	
+	short               mensagem_enviada; //controle para saber se já foi enviada
+	short               mensagem_redirecionada;
 };
 
 typedef struct EstruturaControle estrutura_controle;
@@ -84,14 +93,18 @@ short int contator_fila_entrada = 0;
 short int contator_fila_saida = 0;
 estrutura_controle fila_entrada[100];
 estrutura_controle fila_saida[100];
+
 char* montar_mensagem_dado_envio(struct EstruturaControle);
+void carregar_info_fila_entrada(short int, enum tipo_mensagem);
 
 /* salva as mensagens recebidas por algum roteador */
 struct Mensagem {
 
-	short roteador_id;
+	//short roteador_id;
 	char  mensagem[100]; //Mensagem de com tamanho de 100 chars
 	short mensagem_exibida;
+	short id_origem;
+	short id_destino;
 };
 
 typedef struct Mensagem mensagem;
@@ -122,13 +135,23 @@ int main (int argc, char *argv[]) {
 	pthread_create(&terminal_thread, NULL, terminal, NULL);
 	pthread_create(&sender_thread, NULL, sender, NULL);
 	pthread_create(&receiver_thread, NULL, receiver, NULL);
-	/* pthread_create(&packet_handler_thread, NULL, packet_handler, NULL); */
+	pthread_create(&packet_handler_thread, NULL, packet_handler, NULL);
 	
 	/* joining threads */
-	pthread_join(terminal_thread, NULL);	
+	//sleep(3);
+	pthread_join(terminal_thread, NULL);
+	//sleep(4);
 	pthread_join(sender_thread, NULL);
+	//sleep(5);
 	pthread_join(receiver_thread, NULL);
-	/* pthread_join(packet_handler, NULL); */
+	//sleep(6);
+	pthread_join(packet_handler_thread, NULL);
+
+
+
+	pthread_mutex_destroy(&fila_saida_mutex);
+	pthread_mutex_destroy(&fila_entrada_mutex);
+	pthread_mutex_destroy(&fila_mensagem_mutex);
 	
 	return 0;
 }
@@ -182,7 +205,7 @@ void *terminal(void *params) {
 
 /* gravar mensagem digitada */
 void inserir_mensagem() {
-
+	
 	int roteador_id_recebe = 0;
     
 	printf("Insira o ID do roteador que ira RECEBER a menssagem: ");
@@ -190,9 +213,18 @@ void inserir_mensagem() {
 
 	char msg[100];
 	printf("Digite a mensagem a ser enviada: ");
-	scanf("%s", fila_saida[contator_fila_saida].mensagem);
+	scanf("%s", msg);
 
+	/* lock mutex */
+	//pthread_mutex_lock(&fila_entrada_mutex);
+	//pthread_mutex_lock(&fila_mensagem_mutex);
+
+	strcpy(fila_saida[contator_fila_saida].mensagem, msg);
 	carrega_info_roteador_receptor(roteador_id_recebe);
+
+	/* pthread_mutex_unlock(&fila_mensagem_mutex); */
+	/* pthread_mutex_unlock(&fila_entrada_mutex); */
+
 }
 
 void carrega_info_roteador_receptor(short int roteador_id_recebe) {
@@ -223,7 +255,7 @@ void carrega_info_roteador_receptor(short int roteador_id_recebe) {
 			fila_saida[contator_fila_saida].id_destino = roteador_id_recebe;
 			fila_saida[contator_fila_saida].porta_origem = roteador_porta;
 			fila_saida[contator_fila_saida].porta_destino = porta;
-			strcpy(fila_saida[contator_fila_saida].ip_origen, roteador_ip);
+			strcpy(fila_saida[contator_fila_saida].ip_origem, roteador_ip);
 			strcpy(fila_saida[contator_fila_saida].ip_destino, ip);
 			fila_saida[contator_fila_saida].mensagem_enviada = 0;
 			fila_saida[contator_fila_saida].tipo_mensagem = dado;
@@ -240,20 +272,22 @@ void carrega_info_roteador_receptor(short int roteador_id_recebe) {
 	if (!roteador_encontrado) {
 		debug("Roteador não encontrado");
 
-		gravar_mensagem(roteador_id_recebe, "Roteador não encontrado");
+		gravar_mensagem(roteador_id_recebe, roteador_id, "Roteador destino não encontrado");
 	}
 }
 
-void gravar_mensagem(short int roteador_id_recebe, char mensagem[100]) {
-
+void gravar_mensagem(short int roteador_id_recebe, short int roteador_id_envio, char mensagem[100]) {
+	
 	short int len = sizeof(mensagens) / sizeof(mensagens[0]);
 	
 	for (int i = 0; i < len; i++) {
 		if (mensagens[i].mensagem_exibida) {
-			
-			mensagens[i].roteador_id = roteador_id_recebe;
+		    
+			mensagens[i].id_origem = roteador_id_envio;
+			mensagens[i].id_destino = roteador_id_recebe;
 			strcpy(mensagens[i].mensagem, mensagem);
 			mensagens[i].mensagem_exibida = 0;
+			
 			break;
 		}
 	}
@@ -268,7 +302,13 @@ void exibir_mensagens() {
 	
 	for (int i = 0; i < len; i++) {
 		if (!mensagens[i].mensagem_exibida) {
-			printf("\nRoteador: %d -- %s\n", mensagens[i].roteador_id, mensagens[i].mensagem);
+
+			if (mensagens[i].id_destino == 0) {
+				printf("\nAtenção: %s\n", mensagens[i].mensagem);
+			}
+			else {
+				printf("\nDe %d para %d -> Mensagem: %s\n", mensagens[i].id_origem, mensagens[i].id_destino, mensagens[i].mensagem);
+			}
 			mensagens[i].mensagem_exibida = 1;
 		}
 	}
@@ -282,28 +322,29 @@ void inicializar_vetor_mensagem() {
 		mensagens[i].mensagem_exibida = 1;
 		fila_entrada[i].mensagem_enviada = 1;
 		fila_saida[i].mensagem_enviada = 1;
+		
+		fila_entrada[i].mensagem_redirecionada = 1;
+		fila_saida[i].mensagem_redirecionada = 1;
 	}
 }
 
 		   
 /* thread que envia a mensagem */
 void *sender(void *params) {
-	//debug("Thread sender criada");
-	/* LEMBRAR DE CRIAR O MUTEX */
-
-	
-	
+    
 	while (1) {
 
 		/* percorre a lista de mensagens para ver se falta alguma para ser enviada,
 		   se tem alguma mensagem na lista, ela será enviada */
+
+		/* lock mutex */
+		//pthread_mutex_lock(&fila_saida_mutex);
 		
 		short int len = sizeof(fila_saida) / sizeof(fila_saida[0]);
 		
 		for (int i = 0; i < len; i++) {
 			if (!fila_saida[i].mensagem_enviada) {
 
-				char buffer[100];
 				struct sockaddr_in cliente_envio;
 
 				/* cria socket */
@@ -333,6 +374,11 @@ void *sender(void *params) {
 
 				/* retorna a mensagem a ser enviada */
 				char mensagem[250];
+
+				strcpy(mensagem, " ");
+				for (int i = 0; i < sizeof(mensagem); i++) {
+					mensagem[i] = 0;
+				}
 				
 				if (fila_saida[i].tipo_mensagem == dado) {
 					strcpy(mensagem, montar_mensagem_dado_envio(fila_saida[i]));
@@ -341,13 +387,12 @@ void *sender(void *params) {
 					//falata implementar
 					//strcpy(mensagem, montar_mensagem_dado_envio(fila_saida[i]));
 				
-				
 				/* envia para o servidor*/
 				if (sendto(socket_descriptor, mensagem, strlen(mensagem), 0, (struct sockaddr*) &cliente_envio, slen) == -1) {
-					gravar_mensagem(fila_saida[i].id_origem, "Error ao tentar enviar mensagem");
+					gravar_mensagem(fila_saida[i].id_destino, fila_saida[i].id_origem, "Error ao tentar enviar mensagem");
 				}
 				else {
-					debug("mensagem foi enviada"); sleep(2);
+					debug("mensagem foi enviada");
 					fila_saida[i].mensagem_enviada = 1;
 				}
 
@@ -359,14 +404,17 @@ void *sender(void *params) {
 
 				close(socket_descriptor);
 			}
-		}		
+		}
+
+		//sleep(4);
+		/* unlock mutex */
+		//pthread_mutex_unlock(&fila_saida_mutex);
 	}
 }
 
 /* servidor */
 void *receiver(void *params) {
 
-	char buffer[250];
 	struct sockaddr_in server_recebe, cliente_envio;
 
 	/* creating socket */
@@ -392,39 +440,73 @@ void *receiver(void *params) {
 
 	while (1) {
 		
-		debug("lendo mensagem");
+		char buffer[250];
 		fflush(stdout);
-		
-		/* clean the buffer */
-		//memset(buffer, '\0', 100);
-		
+
 		int slen = sizeof(cliente_envio);
 		int recv_from = recvfrom(socket_descriptor, buffer, 250, 0, (struct sockaddr*) &cliente_envio, &slen);
 
-		debug("Received packet from");
 		//printf(" %s:%d\n", inet_ntoa(cliente_envio.sin_addr), ntohs(cliente_envio.sin_port));
-
-		/* DEPOIS RETIRAR ISSO AQUI, */
-		gravar_mensagem(0, buffer);
-
+		
 		/* enviar uma resposta de confirmação para o cliente */
 		sendto(socket_descriptor, "OK",3, 0, (struct sockaddr*) &cliente_envio, slen) == -1;
 		
+		/* lock mutex */
+		//pthread_mutex_lock(&fila_entrada_mutex);
+
 		carregar_fila_entrada(buffer);
+
+		/* unlock mutex */
+		//pthread_mutex_unlock(&fila_entrada_mutex);
 	}
 }
 
 
 void *packet_handler(void *params) {
-
+	
 	while (1) {
-		
+
+		/* lock mutex */
+		//pthread_mutex_lock(&fila_saida_mutex);
+		//pthread_mutex_lock(&fila_entrada_mutex);
+		//pthread_mutex_lock(&fila_mensagem_mutex);
+
+		short int len = sizeof(fila_entrada) / sizeof(fila_entrada[0]);
+			
+		for (int i = 0; i < len; i++) {
+
+			if (fila_entrada[i].mensagem_redirecionada == 0) {
+				printf("%d %d\n", roteador_id, fila_entrada[i].id_origem);
+				// se a mensagem estiver no roteador destino, então a mensagem é gravada, 
+				if (fila_entrada[i].id_destino == roteador_id) {
+					gravar_mensagem(roteador_id, fila_entrada[i].id_origem, fila_entrada[i].mensagem);
+				}
+
+				//se não, é redirecionada
+				else {
+					fila_saida[contator_fila_saida].tipo_mensagem = fila_entrada[i].tipo_mensagem;;
+					fila_saida[contator_fila_saida].id_origem     = fila_entrada[i].id_origem;
+					fila_saida[contator_fila_saida].id_destino    = fila_entrada[i].id_destino;
+					fila_saida[contator_fila_saida].porta_origem  = fila_entrada[i].porta_origem;
+					fila_saida[contator_fila_saida].porta_destino = fila_entrada[i].porta_destino;
+					strcpy(fila_saida[contator_fila_saida].ip_origem, fila_entrada[i].ip_origem);
+					strcpy(fila_saida[contator_fila_saida].ip_destino, fila_entrada[i].ip_destino);
+					strcpy(fila_saida[contator_fila_saida].mensagem, fila_entrada[i].mensagem);
+					fila_saida[contator_fila_saida].mensagem_enviada = 0;
+				    
+					contator_fila_saida++;
+					gravar_mensagem(fila_entrada[i].id_destino, fila_entrada[i].id_origem, " Repassando mensagem.");
+				}
+				fila_entrada[i].mensagem_redirecionada = 1;
+			}
+		}
+
+		/* unlock mutex */
+		//pthread_mutex_unlock(&fila_saida_mutex);
+		//pthread_mutex_unlock(&fila_entrada_mutex);
+		//pthread_mutex_unlock(&fila_mensagem_mutex);
 	}
 }
-
-
-
-
 
 
 void inserir_info_roteador() {
@@ -453,7 +535,9 @@ void debug(char msg[100]) {
 
 char* montar_mensagem_dado_envio(struct EstruturaControle s) {
 	
-	static char mensagem_pronta[250], aux[6];
+	static char mensagem_pronta[250];
+	char aux[6];
+	memset(mensagem_pronta, '\0', 250);
 	
 	/* tipo de mensagem */
 	mensagem_pronta[0] = 'D';
@@ -493,10 +577,58 @@ void carregar_fila_entrada(char buffer[250]) {
 	}
 
 	/* carrega as outras info faltantes */
-	carrega_info_roteador_receptor(fila_entrada[contator_fila_entrada].id_destino);
+	//carrega_info_roteador_receptor(fila_entrada[contator_fila_entrada].id_destino);
+	carregar_info_fila_entrada(fila_entrada[contator_fila_entrada].id_destino, (buffer[0] == 'D' ? dado : controle));
+	fila_entrada[contator_fila_entrada].mensagem_redirecionada = 0;
 	
-	fila_entrada[contator_fila_entrada].tipo_mensagem = buffer[0] == 'D' ? dado : controle;
+	//fila_entrada[contator_fila_entrada].tipo_mensagem = buffer[0] == 'D' ? dado : controle;
 	
-	printf("%d ", fila_entrada[contator_fila_entrada].porta_destino);
-	printf("%s ", fila_entrada[contator_fila_entrada].ip_destino);
+	//printf("%d ", fila_entrada[contator_fila_entrada].porta_destino);
+	//printf("%s ", fila_entrada[contator_fila_entrada].ip_destino);
+}
+
+
+
+void carregar_info_fila_entrada(short int roteador_id_recebe, enum tipo_mensagem tipo) {
+    
+	FILE* roteador_arquivo = fopen("./roteador.config","rt");
+
+	if (roteador_arquivo == NULL) {
+		printf("\nError while reading file \'roteador.config\'\n");
+		return;
+	}
+
+	char linha[121];
+	short int roteador_encontrado = 0;
+    
+	while(fgets(linha, 121, roteador_arquivo)) {
+
+		int ativo, id, porta;
+		char ip[12];
+
+		sscanf(linha, "%d %d %d %s", &ativo, &id, &porta, ip);
+		
+		if (id == roteador_id_recebe) {
+
+			roteador_encontrado = 1;
+
+			/* configura o roteador de acordo com o que está no arquivo */
+			fila_entrada[contator_fila_entrada].porta_origem = roteador_porta;
+			fila_entrada[contator_fila_entrada].porta_destino = porta;
+			strcpy(fila_entrada[contator_fila_entrada].ip_origem, roteador_ip);
+			strcpy(fila_entrada[contator_fila_entrada].ip_destino, ip);
+			fila_entrada[contator_fila_entrada].mensagem_enviada = 0;
+			fila_entrada[contator_fila_entrada].tipo_mensagem = tipo;
+						
+			break;
+		}
+	}
+	
+	fclose(roteador_arquivo);
+
+	if (!roteador_encontrado) {
+		debug("Roteador não encontrado");
+
+		gravar_mensagem(roteador_id_recebe, roteador_id, "Roteador destino não encontrado");
+	}
 }
