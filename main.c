@@ -1,11 +1,12 @@
 /* 
    Grupo: Natanael Zago, Everaldo Gomes 
 
-   compilar: clear && gcc *.c -o exe -pthread && ./exe 1
+   compilar: clear && gcc *.c -o exe -pthread && ./exe N
 
    OBS: O código será refatorado e divido em outros arquivos ao passar do tempo
 
    
+   --------------------------------Anotações 
    -Documentação:------------------------------------------------------------------
    1º caracter é o tipo da mensagem dados (d) ou controle (c)
    2º e 3º caracter são os IDs dos roteadores de origem
@@ -14,7 +15,6 @@
 
    Ex: D0102mensagem
    --------------------------------------------------------------------------------
-
    próximos passos: 
    -corrir exclusão do arquivo
    -tratar mensagem dos roteadores intermediários
@@ -60,14 +60,16 @@ pthread_mutex_t fila_mensagem_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 
 /* cabeçalho de Funções*/
-void inserir_info_roteador();  	/* armazena info do roteador no arquivo roteador.config */
+short inserir_info_roteador();  	/* armazena info do roteador no arquivo roteador.config */
 void debug(char msg[100]); /* exibir mensagens debug */
+void lista_roteador();
 void inserir_mensagem();
 void carrega_info_roteador_receptor(short int);
 void exibir_mensagens();
 void inicializar_vetor_mensagem(); /* NÃO só as mesagens, (falta mudar o nome) */
 void gravar_mensagem(short int roteador_id_recebe, short int roteador_id_envia, char mensagem[100]);
 void carregar_fila_entrada(char [250]);
+void desligar_roteador();
 
 
 /* Threads */
@@ -130,37 +132,42 @@ int main (int argc, char *argv[]) {
         exit(0);
     }
 
-	/* inicializar variáveis "mensagem_exibida = 1" */
-	inicializar_vetor_mensagem();
-
 	/*define um id para o roteador */
 	roteador_id = atoi(argv[1]);
-	inserir_info_roteador();
-
-	/* inicia semáforos */
-	sem_init(&semaforo_terminal, 0, 0);
-	sem_init(&semaforo_sender, 0, 0);
-	sem_init(&semaforo_receiver, 0, 1);
-	sem_init(&semaforo_pkt_handler, 0, 0);
-
-	/* Cria threads */
-	pthread_create(&terminal_thread, NULL, terminal, NULL);
-	pthread_create(&sender_thread, NULL, sender, NULL);
-	pthread_create(&receiver_thread, NULL, receiver, NULL);
-	pthread_create(&packet_handler_thread, NULL, packet_handler, NULL);
 	
-	/* joining threads */
-	pthread_join(terminal_thread, NULL);
-	pthread_join(sender_thread, NULL);
-	pthread_join(receiver_thread, NULL);
-	pthread_join(packet_handler_thread, NULL);
+	if (inserir_info_roteador()) {
 
-	pthread_mutex_destroy(&fila_saida_mutex);
-	pthread_mutex_destroy(&fila_entrada_mutex);
-	pthread_mutex_destroy(&fila_mensagem_mutex);
+		/* inicializar variáveis "mensagem_exibida = 1" */
+		inicializar_vetor_mensagem();
 
-	sem_destroy(&semaforo_sender);
+		/* inicia semáforos */
+		sem_init(&semaforo_terminal, 0, 0);
+		sem_init(&semaforo_sender, 0, 0);
+		sem_init(&semaforo_receiver, 0, 1);
+		sem_init(&semaforo_pkt_handler, 0, 0);
+
+		/* Cria threads */
+		pthread_create(&terminal_thread, NULL, terminal, NULL);
+		pthread_create(&sender_thread, NULL, sender, NULL);
+		pthread_create(&receiver_thread, NULL, receiver, NULL);
+		pthread_create(&packet_handler_thread, NULL, packet_handler, NULL);
 	
+		/* joining threads */
+		pthread_join(terminal_thread, NULL);
+		pthread_join(sender_thread, NULL);
+		pthread_join(receiver_thread, NULL);
+		pthread_join(packet_handler_thread, NULL);
+
+		pthread_mutex_destroy(&fila_saida_mutex);
+		pthread_mutex_destroy(&fila_entrada_mutex);
+		pthread_mutex_destroy(&fila_mensagem_mutex);
+
+		sem_destroy(&semaforo_sender);
+	}
+	else {
+		printf("Roteador %d não pôde ser criado, pois o ID já existe \n\n", roteador_id);
+		lista_roteador();
+	}
 	return 0;
 }
 
@@ -170,24 +177,21 @@ void *terminal(void *params) {
 
 	while (1) {
 
-		system("clear");
+		//system("clear");
 		int action = -1;
 
 		printf("\tGerenciamento dos roteadores\n\n");
-		printf("\t0- Finalizar programa\n");
 		printf("\t1- Enviar mensagens\n");
 		printf("\t2- Ver mensagens recebidas\n");
-		printf("\t3- Tabela de roteamento\n");
-		printf("\t4- Ligar ou desligar depurador [Status: %s]\n", MODO_DEBUG ? "ON" : "OFF");
+		printf("\t3- Desligar roteador\n");
+		printf("\t4- Tabela de roteamento\n");
+		printf("\t5- Listar roteadores\n");
+		printf("\t6- Ligar ou desligar depurador [Status: %s]\n", MODO_DEBUG ? "ON" : "OFF");
 
 		printf("\n\nDigite uma opcao: ");
 		scanf("%d", &action);
 
 		switch (action) {
-		case 0:
-			system("clear");
-			return 0; 
-			
 		case 1:
 			inserir_mensagem();
 			break;
@@ -200,12 +204,25 @@ void *terminal(void *params) {
 			break;
 			
 		case 3:
+			desligar_roteador();
 			break;
 
 		case 4:
-			/* ativa ou desativa o modo debug */
+			/* tabela de roteamento */
+			break;
+
+		case 5:
+			lista_roteador();
+			break;
+			
+		case 6:
 			MODO_DEBUG = MODO_DEBUG ? 0 : 1;
 			break;
+			
+		default:
+			printf("Opcao invalida\n\n");
+			printf("Precione Enter para continuar\n");
+			getchar();getchar();
 		}		
 	}	
 }
@@ -547,20 +564,81 @@ void *packet_handler(void *params) {
 }
 
 
-void inserir_info_roteador() {
+short inserir_info_roteador() {
 
-	FILE *arquivo;
+	short sucesso = 1;
 	
-	arquivo = fopen("roteador.config", "a");
-	fseek(arquivo, 0, SEEK_END);
+	FILE *temp = fopen("./temp","wt");
+	FILE *arquivo = fopen("./roteador.config","rt");
 
-	/* porta padrão: 8000
-	   ftell(arquivo): número de caracteres no arquivo
-	   vão ser a nova porta */
+	/* antes de gravar, conferi se já existe,  para não ter que apagar o arquivo sempre que for executar */
+	char linha[121];
+	short int roteador_encontrado = 0;
+	int ativo, id, porta, cria_novo = 1;
+	char ip[12];
 	
-	roteador_porta = 8000 + ftell(arquivo);
-	fprintf(arquivo, "%d \t%d \t%d \t%s\n", roteador_ativo, roteador_id, roteador_porta, roteador_ip);
+	while(fgets(linha, 121, arquivo)) {
     
+		sscanf(linha, "%d %d %d %s", &ativo, &id, &porta, ip);
+		
+		/* reutiliza os parâmetros de  um roteado antigo */
+		if (id == roteador_id && ativo == 0) {
+		    
+			roteador_porta = porta;	
+			roteador_encontrado = 1;
+			fseek(temp, 0, SEEK_END);
+			fprintf(temp, "%d \t%d \t%d \t%s\n", 1, roteador_id, roteador_porta, roteador_ip);
+			cria_novo = 0;
+		}
+		else if (id == roteador_id && ativo == 1) {
+			sucesso = cria_novo = 0;
+			fseek(temp, 0, SEEK_END);
+			fprintf(temp, "%d \t%d \t%d \t%s\n", ativo, id, porta, roteador_ip);
+		}
+		else {
+			fseek(temp, 0, SEEK_END);
+			fprintf(temp, "%d \t%d \t%d \t%s\n", ativo, id, porta, roteador_ip);
+		}
+	}
+
+	if (cria_novo) {
+		fseek(temp, 0, SEEK_END);
+		roteador_porta = 8000 + ftell(arquivo);
+		fprintf(temp, "%d \t%d \t%d \t%s\n", 1, roteador_id, roteador_porta, roteador_ip);
+	}
+	
+	fclose(arquivo);
+	fclose(temp);
+	remove("roteador.config");
+	rename("temp","roteador.config");
+
+	return sucesso;
+}
+
+void lista_roteador() {
+    
+	FILE *arquivo = fopen("./roteador.config","rt");
+
+	/* antes de gravar, conferi se já existe,  para não ter que apagar o arquivo sempre que for executar */
+	char linha[121];
+	int ativo, id, porta;
+	char ip[12];
+	
+	printf("\t      Roteadores disponiveis       \n\n");
+	printf("\t-----------------------------------\n");
+	printf("\tAtivo \tID \tPorta \tIP\n");
+	printf("\t-----------------------------------\n");
+	
+	while(fgets(linha, 121, arquivo)) {
+    
+		sscanf(linha, "%d %d %d %s", &ativo, &id, &porta, ip);
+
+		if (ativo != 0) {
+			printf("\t%d |\t%d |\t%d | \t%s\n", ativo, id, porta, ip);
+			printf("\t-----------------------------------\n");
+		}
+	}
+	
 	fclose(arquivo);
 }
 
@@ -689,4 +767,9 @@ void carregarBarraProgresso(long tempo) {
     }
 
     printf("\n\n");
+}
+
+
+void desligar_roteador() {
+	
 }
