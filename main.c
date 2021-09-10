@@ -16,7 +16,7 @@
    Ex: D0102mensagem
    --------------------------------------------------------------------------------
    próximos passos: 
-   -corrir exclusão do arquivo
+   -tratar mensagem que não podem ter espaços em branco
    -tratar mensagem dos roteadores intermediários
    -ajustar mensagens tratamento de erros (último)
 */
@@ -70,6 +70,7 @@ void inicializar_vetor_mensagem(); /* NÃO só as mesagens, (falta mudar o nome)
 void gravar_mensagem(short int roteador_id_recebe, short int roteador_id_envia, char mensagem[100]);
 void carregar_fila_entrada(char [250]);
 void desligar_roteador();
+short verificar_roteador_vizinho(short id_origem, short id_destino);
 
 
 /* Threads */
@@ -131,7 +132,7 @@ int main (int argc, char *argv[]) {
 		
         exit(0);
     }
-
+	
 	/*define um id para o roteador */
 	roteador_id = atoi(argv[1]);
 	
@@ -165,7 +166,7 @@ int main (int argc, char *argv[]) {
 		sem_destroy(&semaforo_sender);
 	}
 	else {
-		printf("Roteador %d não pôde ser criado, pois o ID já existe \n\n", roteador_id);
+		printf("Roteador %d não pôde ser criado, pois não está no arquivo de configuração \n\n", roteador_id);
 		lista_roteador();
 	}
 	return 0;
@@ -273,10 +274,10 @@ void carrega_info_roteador_receptor(short int roteador_id_recebe) {
     
 	while(fgets(linha, 121, roteador_arquivo)) {
 
-		int ativo, id, porta;
+		int id, porta;
 		char ip[12];
 
-		sscanf(linha, "%d %d %d %s", &ativo, &id, &porta, ip);
+		sscanf(linha, "%d %d %s", &id, &porta, ip);
 		
 		if (id == roteador_id_recebe) {
 			
@@ -385,7 +386,11 @@ void *sender(void *params) {
 			short int len = sizeof(fila_saida) / sizeof(fila_saida[0]);
 		
 			for (int i = 0; i < len; i++) {
-				if (!fila_saida[i].mensagem_enviada) {
+
+				/* verifica se o roteador fonte é vizinho do destino */
+				short roteador_vizinho = verificar_roteador_vizinho(fila_saida[i].id_origem, fila_saida[i].id_destino);
+				
+				if (!fila_saida[i].mensagem_enviada && roteador_vizinho) {
 
 					struct sockaddr_in cliente_envio;
 
@@ -432,7 +437,6 @@ void *sender(void *params) {
 					/* envia para o servidor*/
 					if (sendto(socket_descriptor, mensagem, strlen(mensagem), 0, (struct sockaddr*) &cliente_envio, slen) == -1) {
 						debug("error ao enviar mensagem");
-//gravar_mensagem(fila_saida[i].id_destino, fila_saida[i].id_origem, "Error ao tentar enviar mensagem");
 					}
 					else {
 						debug("mensagem foi enviada");
@@ -515,7 +519,7 @@ void *packet_handler(void *params) {
 	while (1) {
 
 		sem_wait(&semaforo_pkt_handler);
-		debug("rodando pkt handler");
+
 		/* lock mutex */
 		pthread_mutex_lock(&fila_saida_mutex);
 		pthread_mutex_lock(&fila_entrada_mutex);
@@ -565,53 +569,28 @@ void *packet_handler(void *params) {
 
 
 short inserir_info_roteador() {
-
-	short sucesso = 1;
 	
-	FILE *temp = fopen("./temp","wt");
 	FILE *arquivo = fopen("./roteador.config","rt");
 
-	/* antes de gravar, conferi se já existe,  para não ter que apagar o arquivo sempre que for executar */
-	char linha[121];
-	short int roteador_encontrado = 0;
-	int ativo, id, porta, cria_novo = 1;
-	char ip[12];
+	char linha[121], ip[12];
+	int ativo, id, porta,sucesso = 0;;
 	
 	while(fgets(linha, 121, arquivo)) {
     
-		sscanf(linha, "%d %d %d %s", &ativo, &id, &porta, ip);
+		sscanf(linha, "%d %d %s", &id, &porta, ip);
 		
-		/* reutiliza os parâmetros de  um roteado antigo */
-		if (id == roteador_id && ativo == 0) {
-		    
+   
+		if (id == roteador_id) {
+
+			strcpy(roteador_ip, ip);
 			roteador_porta = porta;	
-			roteador_encontrado = 1;
-			fseek(temp, 0, SEEK_END);
-			fprintf(temp, "%d \t%d \t%d \t%s\n", 1, roteador_id, roteador_porta, roteador_ip);
-			cria_novo = 0;
-		}
-		else if (id == roteador_id && ativo == 1) {
-			sucesso = cria_novo = 0;
-			fseek(temp, 0, SEEK_END);
-			fprintf(temp, "%d \t%d \t%d \t%s\n", ativo, id, porta, roteador_ip);
-		}
-		else {
-			fseek(temp, 0, SEEK_END);
-			fprintf(temp, "%d \t%d \t%d \t%s\n", ativo, id, porta, roteador_ip);
+			sucesso = 1;
+			break;
 		}
 	}
 
-	if (cria_novo) {
-		fseek(temp, 0, SEEK_END);
-		roteador_porta = 8000 + ftell(arquivo);
-		fprintf(temp, "%d \t%d \t%d \t%s\n", 1, roteador_id, roteador_porta, roteador_ip);
-	}
-	
 	fclose(arquivo);
-	fclose(temp);
-	remove("roteador.config");
-	rename("temp","roteador.config");
-
+	
 	return sucesso;
 }
 
@@ -621,22 +600,20 @@ void lista_roteador() {
 
 	/* antes de gravar, conferi se já existe,  para não ter que apagar o arquivo sempre que for executar */
 	char linha[121];
-	int ativo, id, porta;
+	int id, porta;
 	char ip[12];
 	
-	printf("\t      Roteadores disponiveis       \n\n");
+	printf("\t      Roteadores disponiveis     \n\n");
 	printf("\t-----------------------------------\n");
-	printf("\tAtivo \tID \tPorta \tIP\n");
+	printf("\tID \tPorta \t\tIP\n");
 	printf("\t-----------------------------------\n");
 	
 	while(fgets(linha, 121, arquivo)) {
     
-		sscanf(linha, "%d %d %d %s", &ativo, &id, &porta, ip);
+		sscanf(linha, "%d %d %s", &id, &porta, ip);
 
-		if (ativo != 0) {
-			printf("\t%d |\t%d |\t%d | \t%s\n", ativo, id, porta, ip);
-			printf("\t-----------------------------------\n");
-		}
+		printf("\t%d |\t%d | \t%s\n", id, porta, ip);
+		printf("\t-----------------------------------\n");
 	}
 	
 	fclose(arquivo);
@@ -719,10 +696,10 @@ void carregar_info_fila_entrada(short int roteador_id_recebe, enum tipo_mensagem
     
 	while(fgets(linha, 121, roteador_arquivo)) {
 
-		int ativo, id, porta;
+		int id, porta;
 		char ip[12];
 
-		sscanf(linha, "%d %d %d %s", &ativo, &id, &porta, ip);
+		sscanf(linha, "%d %d %s", &id, &porta, ip);
 		
 		if (id == roteador_id_recebe) {
 
@@ -749,6 +726,30 @@ void carregar_info_fila_entrada(short int roteador_id_recebe, enum tipo_mensagem
 	}
 }
 
+
+short verificar_roteador_vizinho(short id_origem, short id_destino) {
+
+
+	FILE *arquivo = fopen("./enlaces.config","rt");
+	
+	char linha[121];
+	int origem, destino, peso, eh_vizinho = 0;
+	
+	while(fgets(linha, 121, arquivo)) {
+    
+		sscanf(linha, "%d %d %d", &origem, &destino, &peso);
+	    
+		if ((origem == id_origem && destino == id_destino) ||
+			(id_origem ==  destino && id_destino == origem)) {
+			eh_vizinho = 1;
+			break;
+		}
+	}
+
+	fclose(arquivo);
+
+	return eh_vizinho;	
+}
 
 
 // Cria uma barra de progresso
