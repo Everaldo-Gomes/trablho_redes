@@ -19,9 +19,9 @@
 
    -criar estrutura da tabela de roteamento origem, destino, peso OK
    -guardar info dos vizinho na tabela de roteamento (lendo o arquivo) OK
-   -coficar o vetor distância para o envio
+   -coficar o vetor distância para o envio OK
    -enviar o vetor disância
-   -decoficar o vetor distância
+   -decoficar o vetor distância OK
 
    -tratar mensagem que não podem ter espaços em branco
    -tratar mensagem dos roteadores intermediários
@@ -48,6 +48,8 @@ sem_t semaforo_sender, semaforo_terminal, semaforo_receiver, semaforo_pkt_handle
 /* variáveis globais */
 short MODO_DEBUG = 0; //usar para controlar modo debug
 short contador_vetor_distancia = 0;
+short tempo_envio_roteador_distancia = 5; //valor padrão
+enum tipo_mensagem {controle, dado};
 
 /* configurando o roteador */
 short int roteador_ativo = 1;
@@ -60,12 +62,13 @@ void *receiver(void *params);//Processar mensagens recebidas
 void *sender(void *params);  //Enviar mensagens roteadores vizinhos 
 void *terminal(void *params);//Controle local das mensagens 
 void *packet_handler(void *params);//Entradas e saídas de dados em tela
-
+void *controle_enlace(void *params); 
 
 /* Mutex */
 pthread_mutex_t fila_saida_mutex    = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t fila_entrada_mutex  = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t fila_mensagem_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t fila_enlace_mutex   = PTHREAD_MUTEX_INITIALIZER;
 
 
 /* cabeçalho de Funções*/
@@ -73,7 +76,7 @@ short inserir_info_roteador();  	/* armazena info do roteador no arquivo roteado
 void debug(char msg[100]); /* exibir mensagens debug */
 void lista_roteador();
 void inserir_mensagem();
-void carrega_info_roteador_receptor(short int);
+void carrega_info_roteador_receptor(short int, enum tipo_mensagem);
 void exibir_mensagens();
 void inicializar_vetor_mensagem(); /* NÃO só as mesagens, (falta mudar o nome) */
 void gravar_mensagem(short int roteador_id_recebe, short int roteador_id_envia, char mensagem[100]);
@@ -86,13 +89,15 @@ void exibir_vetor_distancia();
 char *montar_vetor_distancia_envio(); // cria estrutura dos vetores para serem enviado
 void decodificar_vetor_distancia_recebido(char *mensagem_codificada);
 void setar_vetor_distancia(short origem, short id, short peso); //verifica e/ou substitui se o penso de A pra B for menor
+short distancia_vizinho(short id_vizinho); //busca distância para os vizinhos imediatos
+void carregar_vetor_distancia_envio_vizinho();
+void atualizar_info_arquivo_enlaces();
 
 /* Threads */
-pthread_t terminal_thread, sender_thread, receiver_thread, packet_handler_thread;
+pthread_t terminal_thread, sender_thread, receiver_thread, packet_handler_thread, controla_enlace_thread;
 
 
 /* Estrutura de controle do roteador */
-enum tipo_mensagem {controle, dado};
 
 struct EstruturaControle {
 	
@@ -173,7 +178,10 @@ int main (int argc, char *argv[]) {
 		carregar_info_arquivo_enlaces();
 
 		//APAGAR, SÓ TESTANDO
-		decodificar_vetor_distancia_recebido(montar_vetor_distancia_envio());
+		//decodificar_vetor_distancia_recebido(montar_vetor_distancia_envio());
+		//exibir_vetor_distancia();
+		//decodificar_vetor_distancia_recebido("02(4,2)(5,5)");
+		//decodificar_vetor_distancia_recebido("03(4,2)");
 
 		/* inicia semáforos */
 		sem_init(&semaforo_terminal, 0, 0);
@@ -186,12 +194,14 @@ int main (int argc, char *argv[]) {
 		pthread_create(&sender_thread, NULL, sender, NULL);
 		pthread_create(&receiver_thread, NULL, receiver, NULL);
 		pthread_create(&packet_handler_thread, NULL, packet_handler, NULL);
+		pthread_create(&controla_enlace_thread, NULL, controle_enlace, NULL);
 	
 		/* joining threads */
 		pthread_join(terminal_thread, NULL);
 		pthread_join(sender_thread, NULL);
 		pthread_join(receiver_thread, NULL);
 		pthread_join(packet_handler_thread, NULL);
+		pthread_join(controla_enlace_thread, NULL);
 
 		pthread_mutex_destroy(&fila_saida_mutex);
 		pthread_mutex_destroy(&fila_entrada_mutex);
@@ -222,7 +232,8 @@ void *terminal(void *params) {
 		printf("\t4- Tabela de roteamento\n");
 		printf("\t5- Listar roteadores\n");
 		printf("\t6- Exibir vetor distancia\n");
-		printf("\t7- Ligar ou desligar depurador [Status: %s]\n", MODO_DEBUG ? "ON" : "OFF");
+		printf("\t7- Define tempo envio vetor distancia\n");
+		printf("\t8- Ligar ou desligar depurador [Status: %s]\n", MODO_DEBUG ? "ON" : "OFF");
 
 		printf("\n\nDigite uma opcao: ");
 		scanf("%d", &action);
@@ -256,6 +267,10 @@ void *terminal(void *params) {
 			break;
 			
 		case 7:
+			//chamar a função
+			break;
+			
+		case 8:
 			MODO_DEBUG = MODO_DEBUG ? 0 : 1;
 			break;
 			
@@ -283,23 +298,26 @@ void inserir_mensagem() {
 	printf("Enviando mensagem.");
 	
 	/* lock mutex */
+	pthread_mutex_lock(&fila_enlace_mutex);
 	pthread_mutex_lock(&fila_saida_mutex);
 	printf(".");
 
 	strcpy(fila_saida[contator_fila_saida].mensagem, msg);
-	carrega_info_roteador_receptor(roteador_id_recebe);
+	carrega_info_roteador_receptor(roteador_id_recebe, dado);
 
 	printf("..");
 	
 	pthread_mutex_unlock(&fila_saida_mutex);
+
 	printf("...\n\n");
 
 	/* chama a thread sender */
 	sem_post(&semaforo_sender);
 	sem_wait(&semaforo_terminal);
+	pthread_mutex_unlock(&fila_enlace_mutex);
 }
 
-void carrega_info_roteador_receptor(short int roteador_id_recebe) {
+void carrega_info_roteador_receptor(short int roteador_id_recebe, enum tipo_mensagem tipo) {
     
 	FILE* roteador_arquivo = fopen("./roteador.config","rt");
 
@@ -330,7 +348,7 @@ void carrega_info_roteador_receptor(short int roteador_id_recebe) {
 			strcpy(fila_saida[contator_fila_saida].ip_origem, roteador_ip);
 			strcpy(fila_saida[contator_fila_saida].ip_destino, ip);
 			fila_saida[contator_fila_saida].mensagem_enviada = 0;
-			fila_saida[contator_fila_saida].tipo_mensagem = dado;
+			fila_saida[contator_fila_saida].tipo_mensagem = tipo;
 			contator_fila_saida++;
 /* isso na verdade é o controle da quantidade de roteadores (mudar depois) 
    fazer o mesmo controle das mensagens, se já tem sobreescreve*/
@@ -465,13 +483,16 @@ void *sender(void *params) {
 					for (int i = 0; i < sizeof(mensagem); i++) {
 						mensagem[i] = 0;
 					}
-				
+
+					/* verifica o tipo de mensagem a ser enviada (controle ou dado) */
 					if (fila_saida[i].tipo_mensagem == dado) {
 						strcpy(mensagem, montar_mensagem_dado_envio(fila_saida[i]));
 					}
-					//else
-					//falata implementar
-					//strcpy(mensagem, montar_mensagem_dado_envio(fila_saida[i]));
+					else {
+						strcpy(mensagem, montar_vetor_distancia_envio(fila_saida[i].mensagem));
+					}
+					
+					
 				
 					/* envia para o servidor*/
 					if (sendto(socket_descriptor, mensagem, strlen(mensagem), 0, (struct sockaddr*) &cliente_envio, slen) == -1) {
@@ -540,8 +561,16 @@ void *receiver(void *params) {
 		
 			/* enviar uma resposta de confirmação para o cliente */
 			sendto(socket_descriptor, "OK",3, 0, (struct sockaddr*) &cliente_envio, slen) == -1;
-		
-			carregar_fila_entrada(buffer);
+
+			/* verifica o tipo de mensagem recebida (dado ou controle) */
+
+			if (buffer[0] == 'D') { // mensagem tipo DADO
+				carregar_fila_entrada(buffer);
+			}
+			else { //CONTROLE com as distâncias dos roteadores
+				decodificar_vetor_distancia_recebido(buffer);
+			}
+			
 
 			/* unlock mutex */
 			pthread_mutex_unlock(&fila_entrada_mutex);
@@ -710,17 +739,13 @@ void carregar_fila_entrada(char buffer[250]) {
 
 	/* carrega as outras info faltantes */
 	//carrega_info_roteador_receptor(fila_entrada[contator_fila_entrada].id_destino);
-	carregar_info_fila_entrada(fila_entrada[contator_fila_entrada].id_destino, (buffer[0] == 'D' ? dado : controle));
+	//(buffer[0] == 'D' ? dado : controle)
+	carregar_info_fila_entrada(fila_entrada[contator_fila_entrada].id_destino, dado);
 	fila_entrada[contator_fila_entrada].mensagem_redirecionada = 0;
-	
-	//fila_entrada[contator_fila_entrada].tipo_mensagem = buffer[0] == 'D' ? dado : controle;
-	
-	//printf("%d ", fila_entrada[contator_fila_entrada].porta_destino);
-	//printf("%s ", fila_entrada[contator_fila_entrada].ip_destino);
 }
 
 
-
+/* Com o ID destino, carrega as info do roteador destino */
 void carregar_info_fila_entrada(short int roteador_id_recebe, enum tipo_mensagem tipo) {
     
 	FILE* roteador_arquivo = fopen("./roteador.config","rt");
@@ -734,6 +759,7 @@ void carregar_info_fila_entrada(short int roteador_id_recebe, enum tipo_mensagem
 	short int roteador_encontrado = 0;
     
 	while(fgets(linha, 121, roteador_arquivo)) {
+		
 		int id, porta;
 		char ip[12];
 
@@ -766,7 +792,6 @@ void carregar_info_fila_entrada(short int roteador_id_recebe, enum tipo_mensagem
 
 
 short verificar_roteador_vizinho(short id_origem, short id_destino) {
-
 
 	FILE *arquivo = fopen("./enlaces.config","rt");
 	
@@ -884,11 +909,14 @@ void exibir_vetor_distancia() {
 	printf("\n\n\n");
 }
 
+/* prepara a mensagem vetor distância para poder ser enviada */
 char *montar_vetor_distancia_envio() {
 
 	short int len = sizeof(vetor_distancias) / sizeof(vetor_distancias[0]);
 
 	static char mensagem_pronta[100];
+	mensagem_pronta[0] = 'C';
+	
 	char aux[20];
 	memset(mensagem_pronta, '\0', 100);
 
@@ -905,27 +933,25 @@ char *montar_vetor_distancia_envio() {
 			strcat(mensagem_pronta, aux);
 		}
 	}
-	
+
 	return mensagem_pronta;
 }
 
 void decodificar_vetor_distancia_recebido(char *mensagem_codificada) {
 
-	printf("%s\n\n", mensagem_codificada);
-
 	/* obtem o ID do roteador que enviou */
 	char aux[10];
-	aux[0] = mensagem_codificada[0];
-	aux[1] = mensagem_codificada[1];
+	aux[0] = mensagem_codificada[1]; //1 e 2 porque o 0 é o tipo da mensagem (dado ou controle)
+	aux[1] = mensagem_codificada[2];
 	short j = 0;
-	short origem = atoi(aux);
+	short origem = atoi(aux); //de quem está recebendo
 	short capturar_id = 0, capturar_peso = 0;
 	short id, peso;
 	
 	/* pega os valores dentro dos () na mensagem codificada */
 	memset(aux, '\0', 10);
 	
-	for (int i = 2; i < strlen(mensagem_codificada); i++) {
+	for (int i = 3; i < strlen(mensagem_codificada); i++) {
 
 		if (capturar_id && isdigit(mensagem_codificada[i])) {
 			aux[j] = mensagem_codificada[i];
@@ -953,6 +979,9 @@ void decodificar_vetor_distancia_recebido(char *mensagem_codificada) {
 			memset(aux, '\0', 10);
 			capturar_peso = 0;
 			j = 0;
+			peso += distancia_vizinho(origem);
+
+			
 			setar_vetor_distancia(origem, id, peso);
 		}
 	}
@@ -960,20 +989,139 @@ void decodificar_vetor_distancia_recebido(char *mensagem_codificada) {
 
 void setar_vetor_distancia(short origem, short id, short peso) {
 
-	/* somar pesos vizinhos
-	   tratar caso de não ter a distância para o roteador
-	 */
+	if (id == 0) return; 
 	
+	short encontrou_roteador = 0; 
 	short len = sizeof(vetor_distancias) / sizeof(vetor_distancias[0]);
 
+	//peso += distancia_vizinho(origem);
+	
 	for (int i = 0; i < len; i++) {
 
-		if (vetor_distancias[i].destino == id) {
+		//se o roteador já existe no vetor distância
+		if (vetor_distancias[i].destino == id) {  
 
+			encontrou_roteador = 1;
+			
 			if (vetor_distancias[i].peso > peso) {
 				vetor_distancias[i].peso = peso;
 				vetor_distancias[i].origem = origem;
 			}
+			break;
 		}
 	}
+
+	if (!encontrou_roteador) {
+
+		vetor_distancias[contador_vetor_distancia].origem = origem;
+		vetor_distancias[contador_vetor_distancia].destino = id;
+		vetor_distancias[contador_vetor_distancia].peso = peso;
+		contador_vetor_distancia++;
+	}
+}
+
+//busca distância para os vizinhos imediatos
+short distancia_vizinho(short id_vizinho) {
+
+	short peso = 0;
+	short len = sizeof(vetor_distancias) / sizeof(vetor_distancias[0]);
+
+	for (int i = 0; i < len; i++) {
+
+		if (vetor_distancias[i].destino == id_vizinho) {
+
+			peso = vetor_distancias[i].peso;
+			break;
+		}
+	}
+	
+	return peso;
+}
+
+void *controle_enlace(void *params) {
+
+	while(1) {
+
+		//FATLA FAZER
+		//tratar se  caso um roteador deixar de existir
+		
+		/* sempre lê o arquivo atualizado caso haja mudança */
+		atualizar_info_arquivo_enlaces();
+		
+		/* tempo que vai aguardar para enviar o vetor distância */
+		sleep(tempo_envio_roteador_distancia);
+
+		printf("enviando vetor distancia\n");
+		
+		/* lock mutex */
+		
+		if(pthread_mutex_trylock(&fila_enlace_mutex) == 0) {
+			printf("enlace\n");
+			if(pthread_mutex_trylock(&fila_saida_mutex) == 0) {
+				printf("fila saida\n");
+				/* verifica e monta vetor distancia para todos os vizinhos */
+				carregar_vetor_distancia_envio_vizinho();
+
+				/* unlock mutex */
+				pthread_mutex_unlock(&fila_saida_mutex);
+				printf("unlock fila saida\n");
+				/* chama a thread sender */
+				//sem_wait(&semaforo_terminal);
+				sem_post(&semaforo_sender);
+			}
+			pthread_mutex_unlock(&fila_enlace_mutex);
+			printf("unlock enlace\n");
+		}
+
+	}
+}
+
+void atualizar_info_arquivo_enlaces() {
+
+	FILE *arquivo = fopen("./enlaces.config","rt");
+	
+	char linha[121];
+	int origem, destino, peso;
+	
+	while(fgets(linha, 121, arquivo)) {
+    
+		sscanf(linha, "%d %d %d", &origem, &destino, &peso);
+		
+		if (roteador_id == origem) {
+			setar_vetor_distancia(origem, destino, peso);
+		}
+		else if (roteador_id == destino) {
+			setar_vetor_distancia(destino, origem, peso);
+		}
+	}
+
+	fclose(arquivo);
+}
+
+/* carrega fila saida para enviar para todos os vizinhos */
+void carregar_vetor_distancia_envio_vizinho() {
+
+	FILE *arquivo = fopen("./enlaces.config","rt");
+	
+	char linha[121];
+	int origem, destino, peso;
+	
+	while(fgets(linha, 121, arquivo)) {
+    
+		sscanf(linha, "%d %d %d", &origem, &destino, &peso);
+
+		if (origem == roteador_id ) {
+			
+			strcpy(fila_saida[contator_fila_saida].mensagem, montar_vetor_distancia_envio());
+			carrega_info_roteador_receptor(destino, controle);
+		}
+		else if (destino == roteador_id) {
+			
+			strcpy(fila_saida[contator_fila_saida].mensagem, montar_vetor_distancia_envio());
+			carrega_info_roteador_receptor(origem, controle);
+		}
+
+	}
+
+	fclose(arquivo);
 }
