@@ -16,6 +16,13 @@
    Ex: D0102mensagem
    --------------------------------------------------------------------------------
    próximos passos: 
+
+   -criar estrutura da tabela de roteamento origem, destino, peso OK
+   -guardar info dos vizinho na tabela de roteamento (lendo o arquivo) OK
+   -coficar o vetor distância para o envio
+   -enviar o vetor disância
+   -decoficar o vetor distância
+
    -tratar mensagem que não podem ter espaços em branco
    -tratar mensagem dos roteadores intermediários
    -ajustar mensagens tratamento de erros (último)
@@ -24,6 +31,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include <semaphore.h>
 #include <pthread.h>
 #include <unistd.h>
@@ -38,7 +46,8 @@
 sem_t semaforo_sender, semaforo_terminal, semaforo_receiver, semaforo_pkt_handler;
 
 /* variáveis globais */
-short int MODO_DEBUG = 0; //usar para controlar modo debug
+short MODO_DEBUG = 0; //usar para controlar modo debug
+short contador_vetor_distancia = 0;
 
 /* configurando o roteador */
 short int roteador_ativo = 1;
@@ -71,7 +80,12 @@ void gravar_mensagem(short int roteador_id_recebe, short int roteador_id_envia, 
 void carregar_fila_entrada(char [250]);
 void desligar_roteador();
 short verificar_roteador_vizinho(short id_origem, short id_destino);
-
+void inicializar_vetor_distancia();
+void carregar_info_arquivo_enlaces();
+void exibir_vetor_distancia();
+char *montar_vetor_distancia_envio(); // cria estrutura dos vetores para serem enviado
+void decodificar_vetor_distancia_recebido(char *mensagem_codificada);
+void setar_vetor_distancia(short origem, short id, short peso); //verifica e/ou substitui se o penso de A pra B for menor
 
 /* Threads */
 pthread_t terminal_thread, sender_thread, receiver_thread, packet_handler_thread;
@@ -120,6 +134,19 @@ typedef struct Mensagem mensagem;
 mensagem mensagens[100];
 short int contador_mensagens = 0;
 
+
+struct Vetor_distancia {
+
+	short origem;  // de
+	short destino; // para
+	short peso;    // custo
+};
+
+typedef struct Vetor_distancia vetor_distancia;
+
+vetor_distancia vetor_distancias[50];
+
+
 void carregarBarraProgresso(long tempo);
 
 /* main */
@@ -140,6 +167,13 @@ int main (int argc, char *argv[]) {
 
 		/* inicializar variáveis "mensagem_exibida = 1" */
 		inicializar_vetor_mensagem();
+
+		/* inicializar vetores distância = -1 */
+		inicializar_vetor_distancia();
+		carregar_info_arquivo_enlaces();
+
+		//APAGAR, SÓ TESTANDO
+		decodificar_vetor_distancia_recebido(montar_vetor_distancia_envio());
 
 		/* inicia semáforos */
 		sem_init(&semaforo_terminal, 0, 0);
@@ -187,7 +221,8 @@ void *terminal(void *params) {
 		printf("\t3- Desligar roteador\n");
 		printf("\t4- Tabela de roteamento\n");
 		printf("\t5- Listar roteadores\n");
-		printf("\t6- Ligar ou desligar depurador [Status: %s]\n", MODO_DEBUG ? "ON" : "OFF");
+		printf("\t6- Exibir vetor distancia\n");
+		printf("\t7- Ligar ou desligar depurador [Status: %s]\n", MODO_DEBUG ? "ON" : "OFF");
 
 		printf("\n\nDigite uma opcao: ");
 		scanf("%d", &action);
@@ -217,6 +252,10 @@ void *terminal(void *params) {
 			break;
 			
 		case 6:
+			exibir_vetor_distancia();
+			break;
+			
+		case 7:
 			MODO_DEBUG = MODO_DEBUG ? 0 : 1;
 			break;
 			
@@ -695,7 +734,6 @@ void carregar_info_fila_entrada(short int roteador_id_recebe, enum tipo_mensagem
 	short int roteador_encontrado = 0;
     
 	while(fgets(linha, 121, roteador_arquivo)) {
-
 		int id, porta;
 		char ip[12];
 
@@ -754,6 +792,7 @@ short verificar_roteador_vizinho(short id_origem, short id_destino) {
 
 // Cria uma barra de progresso
 void carregarBarraProgresso(long tempo) {
+	
     int i = 0;
     char load[26];
 
@@ -773,4 +812,168 @@ void carregarBarraProgresso(long tempo) {
 
 void desligar_roteador() {
 	
+}
+
+
+//********************************************************************************
+//                    As funções da fase 2 começam aqui
+//********************************************************************************
+
+void inicializar_vetor_distancia() {
+
+	short int len = sizeof(vetor_distancias) / sizeof(vetor_distancias[0]);
+	
+	for (int i = 0; i < len; i++) {
+
+		vetor_distancias[i].origem = -1;
+		vetor_distancias[i].destino = -1;
+		vetor_distancias[i].peso = -1;
+	}
+}
+
+/* verifica quem é vizinho de quem */
+void carregar_info_arquivo_enlaces() {
+
+	FILE *arquivo = fopen("./enlaces.config","rt");
+	
+	char linha[121];
+	int origem, destino, peso;
+	
+	while(fgets(linha, 121, arquivo)) {
+    
+		sscanf(linha, "%d %d %d", &origem, &destino, &peso);
+
+		if (roteador_id == origem) {
+			
+			vetor_distancias[contador_vetor_distancia].origem = roteador_id;
+			vetor_distancias[contador_vetor_distancia].destino = destino;
+			vetor_distancias[contador_vetor_distancia].peso = peso;
+			contador_vetor_distancia++;
+		}
+		else if (roteador_id == destino) {
+
+			vetor_distancias[contador_vetor_distancia].origem = roteador_id;
+			vetor_distancias[contador_vetor_distancia].destino = origem;
+			vetor_distancias[contador_vetor_distancia].peso = peso;
+			contador_vetor_distancia++;
+		}
+	}
+
+	fclose(arquivo);
+	
+}
+
+
+void exibir_vetor_distancia() {
+
+	short int len = sizeof(vetor_distancias) / sizeof(vetor_distancias[0]);
+
+	printf("\t     Tabela de roteamento        \n\n");
+	printf("\t-----------------------------------\n");
+	printf("\t\tOrigem \tDestino\tPeso\n");
+	printf("\t-----------------------------------\n");
+    
+	for (int i = 0; i < len; i++) {
+
+		if (vetor_distancias[i].origem != -1) {
+			
+			printf("\t\t %d\t%d  \t%d\n", vetor_distancias[i].origem, vetor_distancias[i].destino, vetor_distancias[i].peso);
+			printf("\t-----------------------------------\n");
+		}
+	}
+	printf("\n\n\n");
+}
+
+char *montar_vetor_distancia_envio() {
+
+	short int len = sizeof(vetor_distancias) / sizeof(vetor_distancias[0]);
+
+	static char mensagem_pronta[100];
+	char aux[20];
+	memset(mensagem_pronta, '\0', 100);
+
+	/* adiciona o ID do roteador origem */
+	sprintf(aux, "%02d", roteador_id);
+	strcat(mensagem_pronta, aux);
+
+	for (int i = 0; i < len; i++) {
+
+		if (vetor_distancias[i].origem != -1) {
+
+			memset(aux, '\0', 20);
+			sprintf(aux, "(%02d,%02d)", vetor_distancias[i].destino, vetor_distancias[i].peso);
+			strcat(mensagem_pronta, aux);
+		}
+	}
+	
+	return mensagem_pronta;
+}
+
+void decodificar_vetor_distancia_recebido(char *mensagem_codificada) {
+
+	printf("%s\n\n", mensagem_codificada);
+
+	/* obtem o ID do roteador que enviou */
+	char aux[10];
+	aux[0] = mensagem_codificada[0];
+	aux[1] = mensagem_codificada[1];
+	short j = 0;
+	short origem = atoi(aux);
+	short capturar_id = 0, capturar_peso = 0;
+	short id, peso;
+	
+	/* pega os valores dentro dos () na mensagem codificada */
+	memset(aux, '\0', 10);
+	
+	for (int i = 2; i < strlen(mensagem_codificada); i++) {
+
+		if (capturar_id && isdigit(mensagem_codificada[i])) {
+			aux[j] = mensagem_codificada[i];
+			j++;
+		}
+		else if (capturar_peso && isdigit(mensagem_codificada[i])) {
+			aux[j] = mensagem_codificada[i];
+			j++;
+		}
+		
+		if (mensagem_codificada[i] == '(') {
+			capturar_id = 1;
+		}
+		else if (mensagem_codificada[i] == ',') {
+			
+			capturar_id = 0;
+			capturar_peso = 1;
+			id = atoi(aux);
+			memset(aux, '\0', 10);
+			j = 0;
+		}
+		else if (mensagem_codificada[i] == ')') {
+			
+			peso = atoi(aux);
+			memset(aux, '\0', 10);
+			capturar_peso = 0;
+			j = 0;
+			setar_vetor_distancia(origem, id, peso);
+		}
+	}
+}
+
+void setar_vetor_distancia(short origem, short id, short peso) {
+
+	/* somar pesos vizinhos
+	   tratar caso de não ter a distância para o roteador
+	 */
+	
+	short len = sizeof(vetor_distancias) / sizeof(vetor_distancias[0]);
+
+	for (int i = 0; i < len; i++) {
+
+		if (vetor_distancias[i].destino == id) {
+
+			if (vetor_distancias[i].peso > peso) {
+				vetor_distancias[i].peso = peso;
+				vetor_distancias[i].origem = origem;
+			}
+		}
+	}
 }
