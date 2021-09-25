@@ -16,12 +16,8 @@
    Ex: D0102mensagem
    --------------------------------------------------------------------------------
    próximos passos: 
-
-   -criar estrutura da tabela de roteamento origem, destino, peso OK
-   -guardar info dos vizinho na tabela de roteamento (lendo o arquivo) OK
-   -coficar o vetor distância para o envio OK
-   -enviar o vetor disância
-   -decoficar o vetor distância OK
+   
+   -aumentar o tamanho das filas de entrada e saida
    -tratar se  caso um roteador deixar de existir (enlaces)
 
    -tratar mensagem que não podem ter espaços em branco
@@ -917,10 +913,10 @@ char *montar_vetor_distancia_envio() {
 	short int len = sizeof(vetor_distancias) / sizeof(vetor_distancias[0]);
 
 	static char mensagem_pronta[100];
+	memset(mensagem_pronta, '\0', 100);
 	mensagem_pronta[0] = 'C';
 	
 	char aux[20];
-	memset(mensagem_pronta, '\0', 100);
 
 	/* adiciona o ID do roteador origem */
 	sprintf(aux, "%02d", roteador_id);
@@ -950,7 +946,7 @@ void decodificar_vetor_distancia_recebido(char *mensagem_codificada) {
 	short capturar_id = 0, capturar_peso = 0;
 	short id, peso;
 	
-	/* pega os valores dentro dos () na mensagem codificada */
+	/* pega ID da origem, os valores dentro dos () na mensagem codificada */
 	memset(aux, '\0', 10);
 	
 	for (int i = 3; i < strlen(mensagem_codificada); i++) {
@@ -966,6 +962,7 @@ void decodificar_vetor_distancia_recebido(char *mensagem_codificada) {
 		
 		if (mensagem_codificada[i] == '(') {
 			capturar_id = 1;
+			capturar_peso = 0;
 		}
 		else if (mensagem_codificada[i] == ',') {
 			
@@ -992,10 +989,8 @@ void decodificar_vetor_distancia_recebido(char *mensagem_codificada) {
 void setar_vetor_distancia(short origem, short id, short peso) {
 
 	if (id == 0 || id == roteador_id) {
-		printf("%d   %d\n", id, roteador_id);
 		return; 
 	}
-
 	
 	short encontrou_roteador = 0; 
 	short len = sizeof(vetor_distancias) / sizeof(vetor_distancias[0]);

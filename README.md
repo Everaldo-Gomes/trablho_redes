@@ -8,8 +8,6 @@
 
 ## mundaças para a fase 2
 
-thread sender
-thread receiver
 nova thread (controla_enlace_thread) para o controle do envio das tabelas de roteamento
-
-e o que está após a linha: 
+opção no menu para controlar o tempo em que os enlaces são enviados
+e tudo que está após a linha: 
