@@ -10,4 +10,4 @@
 
 nova thread (controla_enlace_thread) para o controle do envio das tabelas de roteamento
 opção no menu para controlar o tempo em que os enlaces são enviados
-e tudo que está após a linha: 
+e tudo que está após a linha: 840

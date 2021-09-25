@@ -17,9 +17,7 @@
    --------------------------------------------------------------------------------
    próximos passos: 
    
-   -aumentar o tamanho das filas de entrada e saida
    -tratar se  caso um roteador deixar de existir (enlaces)
-
    -tratar mensagem que não podem ter espaços em branco
    -tratar mensagem dos roteadores intermediários
    -ajustar mensagens tratamento de erros (último)
@@ -47,6 +45,7 @@ short MODO_DEBUG = 0; //usar para controlar modo debug
 short contador_vetor_distancia = 0;
 short tempo_envio_roteador_distancia = 5; //valor padrão
 enum tipo_mensagem {controle, dado};
+#define len_msg  500
 
 /* configurando o roteador */
 short int roteador_ativo = 1;
@@ -73,6 +72,7 @@ short inserir_info_roteador();  	/* armazena info do roteador no arquivo roteado
 void debug(char msg[100]); /* exibir mensagens debug */
 void lista_roteador();
 void inserir_mensagem();
+void definir_tempo_envio_vetor_distancia();
 void carrega_info_roteador_receptor(short int, enum tipo_mensagem);
 void exibir_mensagens();
 void inicializar_vetor_mensagem(); /* NÃO só as mesagens, (falta mudar o nome) */
@@ -115,8 +115,8 @@ typedef struct EstruturaControle estrutura_controle;
 
 short int contator_fila_entrada = 0;
 short int contator_fila_saida = 0;
-estrutura_controle fila_entrada[100];
-estrutura_controle fila_saida[100];
+estrutura_controle fila_entrada[len_msg];
+estrutura_controle fila_saida[len_msg];
 
 char* montar_mensagem_dado_envio(struct EstruturaControle);
 void carregar_info_fila_entrada(short int, enum tipo_mensagem);
@@ -133,7 +133,7 @@ struct Mensagem {
 
 typedef struct Mensagem mensagem;
 
-mensagem mensagens[100];
+mensagem mensagens[len_msg];
 short int contador_mensagens = 0;
 
 
@@ -264,7 +264,7 @@ void *terminal(void *params) {
 			break;
 			
 		case 7:
-			//chamar a função
+			definir_tempo_envio_vetor_distancia();
 			break;
 			
 		case 8:
@@ -489,7 +489,6 @@ void *sender(void *params) {
 						strcpy(mensagem, montar_vetor_distancia_envio(fila_saida[i].mensagem));
 					}
 					
-					
 				
 					/* envia para o servidor*/
 					if (sendto(socket_descriptor, mensagem, strlen(mensagem), 0, (struct sockaddr*) &cliente_envio, slen) == -1) {
@@ -552,6 +551,7 @@ void *receiver(void *params) {
 
 			char buffer[250];
 			fflush(stdout);
+			memset(buffer, '\0', 250);
 
 			int slen = sizeof(cliente_envio);
 			int recv_from = recvfrom(socket_descriptor, buffer, 250, 0, (struct sockaddr*) &cliente_envio, &slen);
@@ -833,6 +833,7 @@ void carregarBarraProgresso(long tempo) {
 }
 
 
+//por enquanto tem que finalizar o terminal manualmente
 void desligar_roteador() {
 	
 }
@@ -841,6 +842,18 @@ void desligar_roteador() {
 //********************************************************************************
 //                    As funções da fase 2 começam aqui
 //********************************************************************************
+
+void definir_tempo_envio_vetor_distancia() {
+
+	system("clear");
+	printf("Tempo atual: %hd segundo(s).\n\n", tempo_envio_roteador_distancia);
+	
+	printf("Insira um novo tempo em segundos: ");
+	scanf("%hd", &tempo_envio_roteador_distancia);
+
+	printf("\n\nNovo tempo definido\n\n Precione Enter para continuar\n\n");
+	getchar();getchar();
+}
 
 void inicializar_vetor_distancia() {
 
