@@ -22,6 +22,7 @@
    -coficar o vetor distância para o envio OK
    -enviar o vetor disância
    -decoficar o vetor distância OK
+   -tratar se  caso um roteador deixar de existir (enlaces)
 
    -tratar mensagem que não podem ter espaços em branco
    -tratar mensagem dos roteadores intermediários
@@ -505,8 +506,10 @@ void *sender(void *params) {
 
 					char a[3];
 				
-					/* recebe confirmação */
-					int recv_from = recvfrom(socket_descriptor, a, 3, 0, (struct sockaddr*) &cliente_envio, &slen);
+					/* recebe confirmação 
+					   o recv_from está comentado porque o roteador destino de alguma forma não retornava
+					   a confirmação e daí, o programa entrava deadlock */
+					//int recv_from = recvfrom(socket_descriptor, a, 3, 0, (struct sockaddr*) &cliente_envio, &slen);
 					debug("Mensagem enviada\n");
 					close(socket_descriptor);
 				}
@@ -570,7 +573,6 @@ void *receiver(void *params) {
 			else { //CONTROLE com as distâncias dos roteadores
 				decodificar_vetor_distancia_recebido(buffer);
 			}
-			
 
 			/* unlock mutex */
 			pthread_mutex_unlock(&fila_entrada_mutex);
@@ -989,7 +991,11 @@ void decodificar_vetor_distancia_recebido(char *mensagem_codificada) {
 
 void setar_vetor_distancia(short origem, short id, short peso) {
 
-	if (id == 0) return; 
+	if (id == 0 || id == roteador_id) {
+		printf("%d   %d\n", id, roteador_id);
+		return; 
+	}
+
 	
 	short encontrou_roteador = 0; 
 	short len = sizeof(vetor_distancias) / sizeof(vetor_distancias[0]);
@@ -1042,37 +1048,27 @@ void *controle_enlace(void *params) {
 
 	while(1) {
 
-		//FATLA FAZER
-		//tratar se  caso um roteador deixar de existir
-		
 		/* sempre lê o arquivo atualizado caso haja mudança */
 		atualizar_info_arquivo_enlaces();
 		
 		/* tempo que vai aguardar para enviar o vetor distância */
 		sleep(tempo_envio_roteador_distancia);
-
-		printf("enviando vetor distancia\n");
 		
 		/* lock mutex */
-		
 		if(pthread_mutex_trylock(&fila_enlace_mutex) == 0) {
-			printf("enlace\n");
 			if(pthread_mutex_trylock(&fila_saida_mutex) == 0) {
-				printf("fila saida\n");
+		
 				/* verifica e monta vetor distancia para todos os vizinhos */
 				carregar_vetor_distancia_envio_vizinho();
 
 				/* unlock mutex */
 				pthread_mutex_unlock(&fila_saida_mutex);
-				printf("unlock fila saida\n");
+		
 				/* chama a thread sender */
-				//sem_wait(&semaforo_terminal);
 				sem_post(&semaforo_sender);
 			}
 			pthread_mutex_unlock(&fila_enlace_mutex);
-			printf("unlock enlace\n");
 		}
-
 	}
 }
 
@@ -1114,13 +1110,14 @@ void carregar_vetor_distancia_envio_vizinho() {
 			
 			strcpy(fila_saida[contator_fila_saida].mensagem, montar_vetor_distancia_envio());
 			carrega_info_roteador_receptor(destino, controle);
+			contator_fila_saida++;
 		}
 		else if (destino == roteador_id) {
 			
 			strcpy(fila_saida[contator_fila_saida].mensagem, montar_vetor_distancia_envio());
 			carrega_info_roteador_receptor(origem, controle);
+			contator_fila_saida++;
 		}
-
 	}
 
 	fclose(arquivo);
