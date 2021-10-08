@@ -3,8 +3,6 @@
 
    compilar: clear && gcc *.c -o exe -pthread && ./exe N
 
-   OBS: O código será refatorado e divido em outros arquivos ao passar do tempo
-
    
    --------------------------------Anotações 
    -Documentação:------------------------------------------------------------------
@@ -15,11 +13,8 @@
 
    Ex: D0102mensagem
    --------------------------------------------------------------------------------
-   próximos passos: 
-   
-   -tratar se  caso um roteador deixar de existir (enlaces)
-   -tratar mensagem dos roteadores intermediários
-*/
+ */
+
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -92,6 +87,10 @@ void atualizar_info_arquivo_enlaces();
 short encontrar_id_roteador_redirecionamento(short); // procura a menor distância para o próximo
 short porta_roteador_redirecionamento(short);
 char* ip_roteador_redirecionamento(short);
+void carregar_mensagem_vetor_distancia(short, char *);
+void exibir_mensagem_vetor_distancia();
+
+
 
 /* Threads */
 pthread_t terminal_thread, sender_thread, receiver_thread, packet_handler_thread, controla_enlace_thread;
@@ -139,7 +138,7 @@ typedef struct Mensagem mensagem;
 mensagem mensagens[len_msg];
 short int contador_mensagens = 0;
 
-
+/* vetor usado para fazer as operações */
 struct Vetor_distancia {
 
 	short origem;  // de
@@ -148,8 +147,20 @@ struct Vetor_distancia {
 };
 
 typedef struct Vetor_distancia vetor_distancia;
-
 vetor_distancia vetor_distancias[TAMANHO_VETOR_DISTANCIA];
+
+
+/* vetor que é exibido  */
+struct Vetor_distancia_exibicao {
+	
+	short id;
+	char vetor[100];
+};
+
+typedef struct Vetor_distancia_exibicao vetor_distancia_exibicao;
+vetor_distancia_exibicao vetor_distancias_exibicao[TAMANHO_VETOR_DISTANCIA];
+
+
 
 
 void carregarBarraProgresso(long tempo);
@@ -226,9 +237,9 @@ void *terminal(void *params) {
 		printf("\t1- Enviar mensagens\n");
 		printf("\t2- Ver mensagens recebidas\n");
 		printf("\t3- Desligar roteador\n");
-		printf("\t4- Tabela de roteamento\n");
+		printf("\t4- Exibir vetor distancia\n");
 		printf("\t5- Listar roteadores\n");
-		printf("\t6- Exibir vetor distancia\n");
+		printf("\t6- Tabela de roteamento\n");
 		printf("\t7- Define tempo envio vetor distancia\n");
 		printf("\t8- Ligar ou desligar depurador [Status: %s]\n", MODO_DEBUG ? "ON" : "OFF");
 
@@ -252,7 +263,7 @@ void *terminal(void *params) {
 			break;
 
 		case 4:
-			/* tabela de roteamento */
+			exibir_mensagem_vetor_distancia();
 			break;
 
 		case 5:
@@ -468,9 +479,6 @@ void *sender(void *params) {
 					else if (roteador_vizinho) {
 						porta = fila_saida[i].porta_destino;
 						strcpy(ip, fila_saida[i].ip_destino);
-						/* printf("Controle: \n"); */
-						/* printf("ID: %d\n %d", id_roteador_redirecionamento, fila_saida[i].id_destino); */
-						/* printf("Porta: %d\n\n", porta); */
 					}
 					
 				    
@@ -894,6 +902,9 @@ void inicializar_vetor_distancia() {
 		vetor_distancias[i].origem = -1;
 		vetor_distancias[i].destino = -1;
 		vetor_distancias[i].peso = -1;
+
+		/* inicializar também os vetores que serão exibidos */
+		vetor_distancias_exibicao[i].id = -1;
 	}
 }
 
@@ -991,6 +1002,8 @@ void decodificar_vetor_distancia_recebido(char *mensagem_codificada) {
 	
 	/* pega ID da origem, os valores dentro dos () na mensagem codificada */
 	memset(aux, '\0', 10);
+
+	carregar_mensagem_vetor_distancia(origem, mensagem_codificada);
 	
 	for (int i = 3; i < strlen(mensagem_codificada); i++) {
 
@@ -1219,4 +1232,54 @@ char* ip_roteador_redirecionamento(short id_roteador_redirecionamento) {
 
 	fclose(arquivo);
 	return ip_retorno;
+}
+
+void carregar_mensagem_vetor_distancia(short id_origem, char *mensagem_vetor_distancia) {
+
+	short posicao_livre = 0, encontrou = 0;
+	
+	for (int i = 0; i < TAMANHO_VETOR_DISTANCIA; i++) {
+
+		if (vetor_distancias_exibicao[i].id == id_origem) {
+			
+			memset(vetor_distancias_exibicao[i].vetor, '\0', 100);
+			strcpy(vetor_distancias_exibicao[i].vetor, mensagem_vetor_distancia);
+			vetor_distancias_exibicao[i].id = id_origem;
+			encontrou = 1;
+		}
+
+		else if (!posicao_livre && vetor_distancias_exibicao[i].id == -1) {
+
+			posicao_livre = i;
+		}
+	}
+
+	if (!encontrou) {
+		
+		memset(vetor_distancias_exibicao[posicao_livre].vetor, '\0', 100);
+		strcpy(vetor_distancias_exibicao[posicao_livre].vetor, mensagem_vetor_distancia);
+		vetor_distancias_exibicao[posicao_livre].id = id_origem;
+	}	
+}
+
+
+void exibir_mensagem_vetor_distancia() {
+	
+	printf("\n\n\t\t\tUltimos Vetores Distancias\n\n");
+	
+	char *str = malloc(strlen(vetor_distancias_exibicao[0].vetor));
+
+	for (int i = 0; i < TAMANHO_VETOR_DISTANCIA; i++) {
+
+		if (vetor_distancias_exibicao[i].id != -1) {
+			
+			printf("\t\tRoteador: %d repassou: %s \n",
+				   vetor_distancias_exibicao[i].id,
+				   strncpy(str, vetor_distancias_exibicao[i].vetor + 3, 99));
+		}
+	}
+
+	printf("\n\n\n");
+	
+    free(str);
 }
