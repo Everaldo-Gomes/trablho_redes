@@ -18,9 +18,7 @@
    próximos passos: 
    
    -tratar se  caso um roteador deixar de existir (enlaces)
-   -tratar mensagem que não podem ter espaços em branco
    -tratar mensagem dos roteadores intermediários
-   -ajustar mensagens tratamento de erros (último)
 */
 
 #include <stdio.h>
@@ -37,6 +35,8 @@
 
 #define KGRN  "\x1B[32m" //Cor verde para terminal
 #define KWHT  "\x1B[37m" //Cor branca para
+#define TAMANHO_VETOR_DISTANCIA 50
+
 
 sem_t semaforo_sender, semaforo_terminal, semaforo_receiver, semaforo_pkt_handler;
 
@@ -89,6 +89,9 @@ void setar_vetor_distancia(short origem, short id, short peso); //verifica e/ou 
 short distancia_vizinho(short id_vizinho); //busca distância para os vizinhos imediatos
 void carregar_vetor_distancia_envio_vizinho();
 void atualizar_info_arquivo_enlaces();
+short encontrar_id_roteador_redirecionamento(short); // procura a menor distância para o próximo
+short porta_roteador_redirecionamento(short);
+char* ip_roteador_redirecionamento(short);
 
 /* Threads */
 pthread_t terminal_thread, sender_thread, receiver_thread, packet_handler_thread, controla_enlace_thread;
@@ -146,7 +149,7 @@ struct Vetor_distancia {
 
 typedef struct Vetor_distancia vetor_distancia;
 
-vetor_distancia vetor_distancias[50];
+vetor_distancia vetor_distancias[TAMANHO_VETOR_DISTANCIA];
 
 
 void carregarBarraProgresso(long tempo);
@@ -174,11 +177,8 @@ int main (int argc, char *argv[]) {
 		inicializar_vetor_distancia();
 		carregar_info_arquivo_enlaces();
 
-		//APAGAR, SÓ TESTANDO
-		//decodificar_vetor_distancia_recebido(montar_vetor_distancia_envio());
-		//exibir_vetor_distancia();
-		//decodificar_vetor_distancia_recebido("02(4,2)(5,5)");
-		//decodificar_vetor_distancia_recebido("03(4,2)");
+
+		
 
 		/* inicia semáforos */
 		sem_init(&semaforo_terminal, 0, 0);
@@ -368,6 +368,7 @@ void gravar_mensagem(short int roteador_id_recebe, short int roteador_id_envio, 
 	short int len = sizeof(mensagens) / sizeof(mensagens[0]);
 	
 	for (int i = 0; i < len; i++) {
+		
 		if (mensagens[i].mensagem_exibida) {
 		    
 			mensagens[i].id_origem = roteador_id_envio;
@@ -439,13 +440,40 @@ void *sender(void *params) {
 		
 			short int len = sizeof(fila_saida) / sizeof(fila_saida[0]);
 		
-			for (int i = 0; i < len; i++) {
+			for (int i = 0; i < len; i++) { // printf("%d\n", i);
 
 				/* verifica se o roteador fonte é vizinho do destino */
 				short roteador_vizinho = verificar_roteador_vizinho(fila_saida[i].id_origem, fila_saida[i].id_destino);
+				short id_roteador_redirecionamento = encontrar_id_roteador_redirecionamento(fila_saida[i].id_destino);
 				
-				if (!fila_saida[i].mensagem_enviada && roteador_vizinho) {
+				if (!fila_saida[i].mensagem_enviada && id_roteador_redirecionamento != -1) { //&& roteador_vizinho
 
+					short porta = 0;
+					char ip[12];
+					memset(ip, '\0', 12);
+					
+					if (fila_saida[i].tipo_mensagem == dado) {
+
+						if (id_roteador_redirecionamento == roteador_id) {
+							porta = fila_saida[i].porta_destino;
+							strcpy(ip, fila_saida[i].ip_destino);
+						}
+						else {
+							porta = porta_roteador_redirecionamento(id_roteador_redirecionamento);
+							memset(ip, '\0', 12);
+							strcpy(ip, ip_roteador_redirecionamento(id_roteador_redirecionamento));
+						}
+						
+					}
+					else if (roteador_vizinho) {
+						porta = fila_saida[i].porta_destino;
+						strcpy(ip, fila_saida[i].ip_destino);
+						/* printf("Controle: \n"); */
+						/* printf("ID: %d\n %d", id_roteador_redirecionamento, fila_saida[i].id_destino); */
+						/* printf("Porta: %d\n\n", porta); */
+					}
+					
+				    
 					struct sockaddr_in cliente_envio;
 
 					/* cria socket */
@@ -462,10 +490,11 @@ void *sender(void *params) {
 
 					/* preenche com as info do servidor */
 					cliente_envio.sin_family = AF_INET; // IPv4
-					cliente_envio.sin_port = htons(fila_saida[i].porta_destino);
+					cliente_envio.sin_port = htons(porta); //fila_saida[i].porta_destino
 
 					/* bind socket */
-					if (inet_aton(fila_saida[i].ip_destino, &cliente_envio.sin_addr) == 0) {
+					//fila_saida[i].ip_destino
+					if (inet_aton(ip, &cliente_envio.sin_addr) == 0) {
 						printf("INET_ATON() failed\n");
 					}
 	
@@ -498,7 +527,7 @@ void *sender(void *params) {
 						debug("mensagem foi enviada");
 						fila_saida[i].mensagem_enviada = 1;
 					}
-
+					
 					char a[3];
 				
 					/* recebe confirmação 
@@ -604,6 +633,7 @@ void *packet_handler(void *params) {
 
 				//se não, é redirecionada
 				else {
+					//printf("redirecionando \n\n");
 					fila_saida[contator_fila_saida].tipo_mensagem = fila_entrada[i].tipo_mensagem;;
 					fila_saida[contator_fila_saida].id_origem     = fila_entrada[i].id_origem;
 					fila_saida[contator_fila_saida].id_destino    = fila_entrada[i].id_destino;
@@ -1129,4 +1159,64 @@ void carregar_vetor_distancia_envio_vizinho() {
 	}
 
 	fclose(arquivo);
+}
+
+short encontrar_id_roteador_redirecionamento(short id_destino) {
+
+	short id = -1;
+
+	for (int i = 0; i < TAMANHO_VETOR_DISTANCIA; i++) {
+
+		if (vetor_distancias[i].destino == id_destino) {
+			//printf("_::::: %d\n", id_destino);
+			id = vetor_distancias[i].origem;
+			break;
+		}
+	}
+
+	return id;
+}
+
+short porta_roteador_redirecionamento(short id_roteador_redirecionamento) {
+
+	FILE *arquivo = fopen("./roteador.config","rt");
+	
+	char linha[121], ip[12];
+	int id = 0, porta = 0;
+	
+	while(fgets(linha, 121, arquivo)) {
+    
+		sscanf(linha, "%d %d %s", &id, &porta, ip);
+		
+		if (id_roteador_redirecionamento == id) {
+			break;
+		}
+	}
+
+	fclose(arquivo);
+	return porta;
+}
+
+char* ip_roteador_redirecionamento(short id_roteador_redirecionamento) {
+	
+	FILE *arquivo = fopen("./roteador.config","rt");
+	
+	char linha[121], ip[12];
+	int id = 0, porta = 0;
+	static char ip_retorno[12];
+	
+	while(fgets(linha, 121, arquivo)) {
+
+		memset(ip, '\0', 12);
+		sscanf(linha, "%d %d %s", &id, &porta, ip);
+		
+		if (id_roteador_redirecionamento == id) {
+
+			strcpy(ip_retorno, ip);
+			break;
+		}
+	}
+
+	fclose(arquivo);
+	return ip_retorno;
 }
