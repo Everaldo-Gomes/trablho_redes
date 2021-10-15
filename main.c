@@ -31,7 +31,8 @@
 #define KGRN  "\x1B[32m" //Cor verde para terminal
 #define KWHT  "\x1B[37m" //Cor branca para
 #define TAMANHO_VETOR_DISTANCIA 50
-
+#define INFINITO 50
+#define CONTADOR_MAX 100
 
 sem_t semaforo_sender, semaforo_terminal, semaforo_receiver, semaforo_pkt_handler;
 
@@ -144,6 +145,7 @@ struct Vetor_distancia {
 	short origem;  // de
 	short destino; // para
 	short peso;    // custo
+	short contador; //
 };
 
 typedef struct Vetor_distancia vetor_distancia;
@@ -902,6 +904,7 @@ void inicializar_vetor_distancia() {
 		vetor_distancias[i].origem = -1;
 		vetor_distancias[i].destino = -1;
 		vetor_distancias[i].peso = -1;
+		vetor_distancias[i].contador = 0;
 
 		/* inicializar também os vetores que serão exibidos */
 		vetor_distancias_exibicao[i].id = -1;
@@ -936,8 +939,7 @@ void carregar_info_arquivo_enlaces() {
 		}
 	}
 
-	fclose(arquivo);
-	
+	fclose(arquivo);	
 }
 
 
@@ -946,16 +948,16 @@ void exibir_vetor_distancia() {
 	short int len = sizeof(vetor_distancias) / sizeof(vetor_distancias[0]);
 
 	printf("\t     Tabela de roteamento        \n\n");
-	printf("\t-----------------------------------\n");
-	printf("\t\tOrigem \tDestino\tPeso\n");
-	printf("\t-----------------------------------\n");
+	printf("\t-------------------------------------------\n");
+	printf("\t\tDestino\tVizinho Saida\tCusto\n");
+	printf("\t-------------------------------------------\n");
     
 	for (int i = 0; i < len; i++) {
 
 		if (vetor_distancias[i].origem != -1) {
 			
-			printf("\t\t %d\t%d  \t%d\n", vetor_distancias[i].origem, vetor_distancias[i].destino, vetor_distancias[i].peso);
-			printf("\t-----------------------------------\n");
+			printf("\t\t    %d\t     %d         \t%d\n", vetor_distancias[i].destino, vetor_distancias[i].origem, vetor_distancias[i].peso);
+			printf("\t-------------------------------------------\n");
 		}
 	}
 	printf("\n\n\n");
@@ -1051,10 +1053,30 @@ void setar_vetor_distancia(short origem, short id, short peso) {
 	short encontrou_roteador = 0; 
 	short len = sizeof(vetor_distancias) / sizeof(vetor_distancias[0]);
 
-	//peso += distancia_vizinho(origem);
-	
 	for (int i = 0; i < len; i++) {
 
+		//conferindo se o roteador está ligado
+		if (vetor_distancias[i].origem != -1 && vetor_distancias[i].origem != origem) {
+			vetor_distancias[i].contador += 1;			
+		}
+		else {
+			vetor_distancias[i].contador = 0;
+		}
+
+		if (vetor_distancias[i].contador >= CONTADOR_MAX && vetor_distancias[i].peso != INFINITO) {
+
+				for (int j = 0; j < len; j++) {
+					if (vetor_distancias[i].origem == vetor_distancias[j].destino) {
+						vetor_distancias[j].peso = INFINITO;
+						break;
+					}
+				}
+				
+				vetor_distancias[i].peso = INFINITO;
+			}
+
+
+		
 		//se o roteador já existe no vetor distância
 		if (vetor_distancias[i].destino == id) {  
 
@@ -1073,6 +1095,7 @@ void setar_vetor_distancia(short origem, short id, short peso) {
 		vetor_distancias[contador_vetor_distancia].origem = origem;
 		vetor_distancias[contador_vetor_distancia].destino = id;
 		vetor_distancias[contador_vetor_distancia].peso = peso;
+		vetor_distancias[contador_vetor_distancia].contador = 0;
 		contador_vetor_distancia++;
 	}
 }
@@ -1096,11 +1119,19 @@ short distancia_vizinho(short id_vizinho) {
 }
 
 void *controle_enlace(void *params) {
+	short c = 0;
+
+	atualizar_info_arquivo_enlaces();
 
 	while(1) {
-
-		/* sempre lê o arquivo atualizado caso haja mudança */
-		atualizar_info_arquivo_enlaces();
+		c++;
+		if (c  >= 2) {
+		
+			/* sempre lê o arquivo atualizado caso haja mudança */
+			atualizar_info_arquivo_enlaces();
+			c = 0;
+		}
+		
 		
 		/* tempo que vai aguardar para enviar o vetor distância */
 		sleep(tempo_envio_roteador_distancia);
